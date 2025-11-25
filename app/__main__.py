@@ -90,10 +90,12 @@ def rebuild_index(db: str, config: str):
 )
 def serve(host: str, port: int):
     """启动 FastAPI 服务"""
-    click.echo("TODO: 实现 FastAPI 服务")
-    # import uvicorn
-    # from app.main import app
-    # uvicorn.run(app, host=host, port=port)
+    import uvicorn
+    from app.main import app
+
+    click.echo(f"正在启动服务: http://{host}:{port}")
+    click.echo(f"API 文档: http://{host}:{port}/docs")
+    uvicorn.run(app, host=host, port=port)
 
 
 @cli.command()
