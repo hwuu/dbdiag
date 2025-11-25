@@ -65,7 +65,7 @@ def continue_diagnosis(user_message: str, chat_history: List) -> Tuple[List, str
     global current_session_id
 
     if not current_session_id:
-        chat_history.append(("请先输入问题描述并点击\"开始诊断\"", None))
+        chat_history.append({"role": "assistant", "content": "请先输入问题描述并点击\"开始诊断\""})
         return chat_history, ""
 
     if not user_message or not user_message.strip():
@@ -73,7 +73,7 @@ def continue_diagnosis(user_message: str, chat_history: List) -> Tuple[List, str
 
     try:
         # 添加用户消息到历史
-        chat_history.append((user_message, None))
+        chat_history.append({"role": "user", "content": user_message})
 
         # 继续对话
         response = dialogue_manager.continue_conversation(
@@ -82,12 +82,12 @@ def continue_diagnosis(user_message: str, chat_history: List) -> Tuple[List, str
 
         # 添加助手回复到历史
         assistant_message = response["message"]
-        chat_history[-1] = (user_message, assistant_message)
+        chat_history.append({"role": "assistant", "content": assistant_message})
 
         return chat_history, ""
 
     except Exception as e:
-        chat_history[-1] = (user_message, f"错误: {str(e)}")
+        chat_history.append({"role": "assistant", "content": f"错误: {str(e)}"})
         return chat_history, ""
 
 
@@ -146,7 +146,6 @@ def create_ui():
             label="",
             height=400,
             show_label=False,
-            avatar_images=(None, "https://em-content.zobj.net/thumbs/120/apple/354/robot_1f916.png"),
         )
 
         with gr.Row():
