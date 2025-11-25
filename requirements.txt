@@ -1,0 +1,18 @@
+# 核心依赖
+pydantic>=2.0.0
+pyyaml>=6.0.0
+click>=8.0.0
+
+# OpenAI SDK（兼容 API）
+openai>=1.0.0
+
+# Web 框架（后续 Phase 3 使用）
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# UI 框架（后续 Phase 4 使用）
+gradio>=4.0.0
+
+# 测试
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
