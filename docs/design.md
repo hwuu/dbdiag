@@ -304,6 +304,11 @@ CREATE TABLE sessions (
     }
   ],
 
+  "recommended_step_ids": [
+    "TICKET-001_step_1",
+    "TICKET-001_step_2"
+  ],
+
   "dialogue_history": [
     {
       "role": "user",
@@ -318,6 +323,11 @@ CREATE TABLE sessions (
   ]
 }
 ```
+
+**重要更新**（2025-11-25）：
+- 新增 `recommended_step_ids` 字段：记录所有已推荐过的步骤ID
+- 区分 `recommended_step_ids`（仅推荐）和 `executed_steps`（用户实际执行）
+- 推荐引擎只排除 `executed_steps`，允许重复推荐未执行的步骤（保守策略）
 
 ---
 
@@ -442,10 +452,12 @@ def compute_confidence(root_cause_pattern, supporting_steps,
     """
     多因素加权计算置信度
     """
-    # 1. 事实匹配度（权重 50%）
-    required_facts = extract_key_symptoms(root_cause_pattern)
-    matched_count = count_matched_facts(required_facts, confirmed_facts)
-    fact_coverage = matched_count / len(required_facts) if required_facts else 0
+    # 1. 事实匹配度（权重 50%）- 使用 LLM 智能评估
+    fact_score = evaluate_facts_for_hypothesis(
+        root_cause_pattern.root_cause,
+        supporting_steps,
+        confirmed_facts
+    )
 
     # 2. 步骤执行进度（权重 30%）
     executed_count = count_executed_steps(supporting_steps, executed_steps)
@@ -460,14 +472,62 @@ def compute_confidence(root_cause_pattern, supporting_steps,
 
     # 综合计算
     confidence = (
-        0.5 * fact_coverage +
+        0.5 * fact_score +
         0.3 * step_progress +
         0.1 * frequency_score +
         0.1 * desc_similarity
     )
 
     return confidence
+
+
+def evaluate_facts_for_hypothesis(root_cause, supporting_steps, confirmed_facts):
+    """
+    使用 LLM 智能评估已确认事实对假设的支持程度（2025-11-25 更新）
+
+    Returns:
+        float: 事实评分 0-1
+            > 0.5: 事实支持该假设
+            < 0.5: 事实反对该假设
+            = 0.5: 事实中性
+    """
+    if not confirmed_facts:
+        return 0.5
+
+    # 使用 LLM 评估每个事实
+    fact_scores = []
+    for fact in confirmed_facts:
+        prompt = f'''
+根因假设: {root_cause}
+支持步骤: {[s.observed_fact for s in supporting_steps[:3]]}
+已确认事实: {fact.fact}
+
+这个事实是否支持该假设？
+- 正面支持（0.6-1.0）：事实表明该根因可能存在
+- 负面反对（0.0-0.4）：事实表明该根因不太可能
+- 中性无关（0.5）：事实与该根因无关
+
+只输出数字（0.0-1.0）
+'''
+        try:
+            score = float(llm_service.generate_simple(prompt))
+            fact_scores.append(min(max(score, 0.0), 1.0))
+        except:
+            fact_scores.append(0.5)  # 失败时默认中性
+
+    # 综合评分：如果有任何负面事实（<0.5），大幅降低整体评分
+    if any(s < 0.5 for s in fact_scores):
+        # 负面事实的影响：取最低分
+        return min(fact_scores)
+    else:
+        # 全是支持或中性：取平均分
+        return sum(fact_scores) / len(fact_scores)
 ```
+
+**关键改进**（2025-11-25）：
+- ✅ 使用 LLM 智能评估事实对假设的支持/反对程度
+- ✅ 负面事实（如"IO 正常"）能有效降低相关假设的置信度
+- ✅ 避免了简单关键词匹配的局限性
 
 ### 5.3 下一步推荐引擎
 
@@ -485,6 +545,9 @@ def recommend_next_action(session):
 
     top_hypothesis = session.active_hypotheses[0]
 
+    # 只排除已执行的步骤（用户做过的），不排除仅推荐过的步骤
+    excluded_step_ids = {s.step_id for s in session.executed_steps}
+
     # 阶段 1: 高置信度 -> 确认根因
     if top_hypothesis['confidence'] > 0.85:
         return generate_root_cause_confirmation(session, top_hypothesis)
@@ -495,7 +558,7 @@ def recommend_next_action(session):
         next_step = find_discriminating_step(
             session.active_hypotheses[0],
             session.active_hypotheses[1] if len(session.active_hypotheses) > 1 else None,
-            session.executed_steps
+            excluded_step_ids  # 只排除已执行的
         )
 
         if next_step:
@@ -504,7 +567,7 @@ def recommend_next_action(session):
     # 阶段 3: 低置信度 -> 多假设投票或主动询问
     common_steps = find_common_recommended_steps(
         session.active_hypotheses[:3],
-        session.executed_steps
+        excluded_step_ids
     )
 
     if common_steps:
@@ -514,6 +577,77 @@ def recommend_next_action(session):
     # 兜底：询问关键信息
     return ask_for_key_symptom(session, top_hypothesis)
 ```
+
+**智能已执行步骤识别**（2025-11-25 新增）：
+
+```python
+def mark_executed_steps_from_feedback(user_message, session):
+    """
+    从用户反馈中智能识别已执行的步骤
+
+    当用户反馈结果时（如"io 正常"），说明用户执行了最近推荐的步骤。
+    使用 LLM 自动识别执行反馈并标记步骤为已执行。
+
+    Args:
+        user_message: 用户消息
+        session: 会话状态
+    """
+    # 找到最近推荐的步骤（还未标记为执行的）
+    last_recommended_step_id = None
+    if session.recommended_step_ids:
+        executed_step_ids = {s.step_id for s in session.executed_steps}
+        for step_id in reversed(session.recommended_step_ids):
+            if step_id not in executed_step_ids:
+                last_recommended_step_id = step_id
+                break
+
+    if not last_recommended_step_id:
+        return  # 没有待确认的推荐步骤
+
+    # 使用 LLM 判断用户是否提供了执行反馈
+    system_prompt = """你是对话分析助手。判断用户的消息是否包含对诊断步骤的执行反馈。
+
+执行反馈的特征：
+1. 报告了观察结果（如"CPU 使用率 95%"、"IO 正常"）
+2. 回答了诊断问题（如"是的"、"确认"）
+3. 提供了检查结果（如"查询时间 30 秒"）
+
+非执行反馈：
+1. 单纯的问题（如"怎么检查？"）
+2. 闲聊或其他话题
+
+输出格式: 只输出 "yes" 或 "no" """
+
+    user_prompt = f"用户消息: {user_message}\n\n这是否包含诊断步骤的执行反馈？"
+
+    try:
+        response = llm_service.generate_simple(user_prompt, system_prompt)
+        is_feedback = response.strip().lower() in ["yes", "是"]
+
+        if is_feedback:
+            # 标记为已执行
+            session.executed_steps.append(
+                ExecutedStep(
+                    step_id=last_recommended_step_id,
+                    result_summary=user_message,
+                )
+            )
+    except Exception:
+        # LLM 调用失败时使用简单规则作为回退
+        feedback_keywords = ["正常", "异常", "%", "占比", "发现", "显示", "是", "确认"]
+        if any(keyword in user_message.lower() for keyword in feedback_keywords):
+            session.executed_steps.append(
+                ExecutedStep(
+                    step_id=last_recommended_step_id,
+                    result_summary=user_message,
+                )
+            )
+```
+
+**关键改进**（2025-11-25）：
+- ✅ 推荐引擎只排除 `executed_steps`，允许重复推荐未执行的步骤（保守策略）
+- ✅ 使用 LLM 自动识别用户反馈中的执行信号
+- ✅ 区分"仅推荐"和"已执行"，避免误判
 
 **区分性步骤识别**：
 
@@ -652,9 +786,64 @@ def format_message_with_citations(step, tickets):
 
 ---
 
-## 六、对话流程示例
+## 六、用户意图识别与复杂输入处理
 
-### 6.1 完整对话流程
+### 6.1 设计背景
+
+真实诊断场景中，用户可能会：
+- 同时陈述多个事实
+- 向系统提问（"检查了什么？"、"有什么结论？"）
+- 建议诊断方向（"会不会是磁盘问题？"）
+- 推翻之前的检查结果（"之前说错了，实际是..."）
+- 在一句话中混合多种意图
+
+为了提升用户体验和诊断效率，系统需要智能识别用户意图并做出相应处理。
+
+### 6.2 意图分类体系
+
+详细的意图分类和处理方案参见 [`design_proposal_251125.md`](./design_proposal_251125.md)。
+
+**核心意图**（Phase 1，重要且阻塞）：
+- **I-101: feedback** - 诊断反馈 ✅ 已实现
+- **I-102: query** - 系统查询（询问诊断进展）
+- **I-103: clarification_request** - 请求澄清（不懂怎么操作）
+- **I-104: unable_to_execute** - 无法执行（遇到障碍）
+- **I-105: correction** - 修正陈述（更正之前说的）
+- **I-901: mixed** - 混合意图
+
+**重要但非阻塞**（Phase 2）：
+- **I-201: suggestion** - 方向建议
+- **I-202: hypothesis_rejection** - 假设拒绝
+- **I-203: partial_feedback** - 部分反馈
+- **I-204: confirmation** - 确认/否定
+
+**增强体验/高级对话**（Phase 3）：
+- **I-301: urgency_expression** - 表达紧急性
+- **I-302: context_reference** - 上下文引用
+- **I-303: multi_issue** - 多问题报告
+- **I-304: seek_explanation** - 寻求解释
+- **I-305: chit_chat** - 闲聊/礼貌用语
+
+### 6.3 实施计划
+
+**Phase 1**（3-4天，已规划）：
+- 实现 I-102（query）、I-103（clarification_request）、I-104（unable_to_execute）、I-105（correction）
+- 基础混合意图处理（I-901）
+- E2E 测试覆盖所有 Phase 1 意图
+
+**Phase 2**（2-3天）：
+- 实现用户建议临时加成、假设拒绝、部分反馈、确认转化
+
+**Phase 3**（3-5天）：
+- 实现上下文引用解析、紧急情况快速诊断、多问题识别、教育性内容生成
+
+详细设计参见 `docs/design_proposal_251125.md`。
+
+---
+
+## 七、对话流程示例
+
+### 7.1 完整对话流程
 
 ````
 [第 1 轮]
@@ -786,7 +975,7 @@ def format_message_with_citations(step, tickets):
   "
 ````
 
-### 6.2 未见问题处理示例
+### 7.2 未见问题处理示例
 
 ```
 场景：用户遇到的问题是 "wait_io 高 + 表膨胀"（而非索引膨胀）
@@ -812,9 +1001,9 @@ def format_message_with_citations(step, tickets):
 
 ---
 
-## 七、实现计划
+## 八、实施计划
 
-### 7.1 项目目录结构
+### 8.1 项目目录结构
 
 ```
 dbdiag/
@@ -872,7 +1061,7 @@ dbdiag/
 注意：运行时生成的文件（如 data/tickets.db、data/sessions/ 等）不会提交到 git 中
 ```
 
-### 7.2 开发阶段
+### 8.2 开发阶段
 
 **Phase 1: 数据层与存储 (Week 1)**
 - [ ] 设计并实现 SQLite 数据库 schema
@@ -903,9 +1092,9 @@ dbdiag/
 
 ---
 
-## 八、关键技术细节
+## 九、关键技术细节
 
-### 8.1 向量检索实现
+### 9.1 向量检索实现
 
 使用 `sqlite-vec` 扩展在 SQLite 中存储和检索向量：
 
@@ -924,7 +1113,7 @@ WHERE embedding MATCH ?
 ORDER BY distance;
 ```
 
-### 8.2 LLM API 调用
+### 9.2 LLM API 调用
 
 统一封装 LLM API 调用，支持 OpenAI 兼容接口：
 
@@ -953,7 +1142,7 @@ class LLMService:
         return response.choices[0].message.content
 ```
 
-### 8.3 Embedding API 调用
+### 9.3 Embedding API 调用
 
 ```python
 class EmbeddingService:
@@ -981,7 +1170,7 @@ class EmbeddingService:
         return [item.embedding for item in response.data]
 ```
 
-### 8.4 会话持久化策略
+### 9.4 会话持久化策略
 
 **简单方案（MVP）**：
 - 每次更新会话时，将整个 `state_json` 序列化并更新到 SQLite
@@ -993,9 +1182,9 @@ class EmbeddingService:
 
 ---
 
-## 九、MVP 验证指标
+## 十、MVP 验证指标
 
-### 9.1 功能指标
+### 10.1 功能指标
 
 | 指标 | 目标值 | 验证方式 |
 |------|--------|----------|
@@ -1004,7 +1193,7 @@ class EmbeddingService:
 | **引用准确率** | 100% | 每个推荐/结论必须有有效的工单引用 |
 | **未见问题支持率** | ≥ 50% | 构造 10 个知识库中不存在的组合问题，评估系统能否给出合理建议 |
 
-### 9.2 性能指标
+### 10.2 性能指标
 
 | 指标 | 目标值 | 说明 |
 |------|--------|------|
@@ -1018,7 +1207,7 @@ class EmbeddingService:
 - 总响应时间目标设为 < 12 秒，为 LLM 调用和其他处理留出余量
 - 检索和计算部分尽量优化到 < 500ms，确保响应时间主要取决于 LLM
 
-### 9.3 质量指标
+### 10.3 质量指标
 
 | 指标 | 目标值 | 验证方式 |
 |------|--------|----------|
@@ -1028,9 +1217,9 @@ class EmbeddingService:
 
 ---
 
-## 十、风险与应对
+## 十一、风险与应对
 
-### 10.1 技术风险
+### 11.1 技术风险
 
 | 风险 | 影响 | 应对策略 |
 |------|------|----------|
@@ -1039,7 +1228,7 @@ class EmbeddingService:
 | **置信度计算不准确** | 错误的根因判断 | 1. 收集反馈数据调优权重<br>2. 人工标注验证集<br>3. 增加置信度阈值 |
 | **SQLite 性能瓶颈** | 大规模数据时查询慢 | 1. 优化索引<br>2. 迁移到 PostgreSQL<br>3. 向量索引独立部署 |
 
-### 10.2 数据风险
+### 11.2 数据风险
 
 | 风险 | 影响 | 应对策略 |
 |------|------|----------|
@@ -1047,7 +1236,7 @@ class EmbeddingService:
 | **知识库覆盖不足** | 无法处理新问题 | 1. 持续补充工单数据<br>2. 记录未覆盖问题<br>3. 专家规则补充 |
 | **步骤描述不一致** | 语义聚类失败 | 1. 标注时统一术语<br>2. 数据清洗<br>3. LLM 辅助归一化 |
 
-### 10.3 产品风险
+### 11.3 产品风险
 
 | 风险 | 影响 | 应对策略 |
 |------|------|----------|
@@ -1057,9 +1246,9 @@ class EmbeddingService:
 
 ---
 
-## 十一、扩展路径
+## 十二、扩展路径
 
-### 11.1 近期优化（MVP 后 1-2 个月）
+### 12.1 近期优化（MVP 后 1-2 个月）
 
 1. **步骤转移关系学习**
    - 统计历史对话中的步骤转移模式
@@ -1076,7 +1265,7 @@ class EmbeddingService:
    - 让 LLM 基于多个案例生成组合步骤
    - Few-shot learning
 
-### 11.2 中期增强（3-6 个月）
+### 12.2 中期增强（3-6 个月）
 
 1. **图数据库集成**
    - 使用 Neo4j 存储现象-步骤-根因关系图
@@ -1093,7 +1282,7 @@ class EmbeddingService:
    - 自动获取实时指标
    - 减少手动操作步骤
 
-### 11.3 长期演进（6+ 个月）
+### 12.3 长期演进（6+ 个月）
 
 1. **生产级部署**
    - 迁移到 PostgreSQL + pgvector
@@ -1112,7 +1301,7 @@ class EmbeddingService:
 
 ---
 
-## 十二、总结
+## 十三、总结
 
 本设计方案基于**步骤级检索**和**多假设追踪**的核心理念，构建了一个轻量级、可扩展的数据库问题诊断助手系统。
 
