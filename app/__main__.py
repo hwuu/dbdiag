@@ -104,11 +104,18 @@ def serve(host: str, port: int):
     is_flag=True,
     help="创建公共分享链接",
 )
-def ui(share: bool):
+@click.option(
+    "--port",
+    default=7860,
+    type=int,
+    help="服务监听端口",
+)
+def ui(share: bool, port: int):
     """启动 Gradio UI"""
-    click.echo("TODO: 实现 Gradio UI")
-    # from ui.gradio_app import launch
-    # launch(share=share)
+    from ui.gradio_app import launch
+
+    click.echo(f"正在启动 Gradio UI: http://0.0.0.0:{port}")
+    launch(share=share, server_port=port)
 
 
 if __name__ == "__main__":
