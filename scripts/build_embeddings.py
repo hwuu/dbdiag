@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Optional, List
 from tqdm import tqdm
 
-from app.utils.config import load_config
-from app.services.embedding_service import EmbeddingService
+from dbdiag.utils.config import load_config
+from dbdiag.services.embedding_service import EmbeddingService
 
 
 def serialize_f32(vector: List[float]) -> bytes:

@@ -5,8 +5,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.core.dialogue_manager import DialogueManager
-from app.utils.config import load_config
+from dbdiag.core.dialogue_manager import DialogueManager
+from dbdiag.utils.config import load_config
 
 
 @pytest.fixture
@@ -14,7 +14,15 @@ def dialogue_manager():
     """创建对话管理器实例"""
     config = load_config()
     db_path = str(Path("data") / "tickets.db")
-    return DialogueManager(db_path, config)
+
+    # 创建单例服务
+    from dbdiag.services.llm_service import LLMService
+    from dbdiag.services.embedding_service import EmbeddingService
+
+    llm_service = LLMService(config)
+    embedding_service = EmbeddingService(config)
+
+    return DialogueManager(db_path, llm_service, embedding_service)
 
 
 def test_slow_query_diagnosis_flow(dialogue_manager):

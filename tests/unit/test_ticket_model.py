@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.models.ticket import Ticket
+from dbdiag.models.ticket import Ticket
 
 
 class TestTicket:

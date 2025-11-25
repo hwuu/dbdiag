@@ -1,4 +1,13 @@
-"""dbdiag 命令行入口"""
+"""dbdiag 命令行入口
+
+使用方式：
+    python -m dbdiag cli            # 启动交互式 CLI 诊断
+    python -m dbdiag api            # 启动 FastAPI 服务
+    python -m dbdiag ui             # 启动 Gradio UI
+    python -m dbdiag init           # 初始化数据库
+    python -m dbdiag import         # 导入工单数据
+    python -m dbdiag rebuild-index  # 重建向量索引
+"""
 import sys
 from pathlib import Path
 
@@ -6,12 +15,61 @@ import click
 
 
 @click.group()
-def cli():
+def main():
     """数据库运维问题诊断助手"""
     pass
 
 
-@cli.command()
+@main.command("cli")
+def interactive_cli():
+    """启动交互式命令行诊断（推荐）"""
+    from cli.main import main as cli_main
+    cli_main()
+
+
+@main.command("api")
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="服务监听地址",
+)
+@click.option(
+    "--port",
+    default=8000,
+    type=int,
+    help="服务监听端口",
+)
+def serve(host: str, port: int):
+    """启动 FastAPI 服务"""
+    import uvicorn
+    from api.main import app
+
+    click.echo(f"正在启动服务: http://{host}:{port}")
+    click.echo(f"API 文档: http://{host}:{port}/docs")
+    uvicorn.run(app, host=host, port=port)
+
+
+@main.command("ui")
+@click.option(
+    "--share",
+    is_flag=True,
+    help="创建公共分享链接",
+)
+@click.option(
+    "--port",
+    default=7860,
+    type=int,
+    help="服务监听端口",
+)
+def ui_launch(share: bool, port: int):
+    """启动 Gradio UI"""
+    from ui.main import launch
+
+    click.echo(f"正在启动 Gradio UI: http://127.0.0.1:{port}")
+    launch(share=share, server_port=port)
+
+
+@main.command()
 @click.option(
     "--db",
     default=None,
@@ -29,7 +87,7 @@ def init(db: str):
         sys.exit(1)
 
 
-@cli.command("import")
+@main.command("import")
 @click.option(
     "--data",
     required=True,
@@ -53,7 +111,7 @@ def import_data(data: str, db: str):
         sys.exit(1)
 
 
-@cli.command("rebuild-index")
+@main.command("rebuild-index")
 @click.option(
     "--db",
     default=None,
@@ -76,47 +134,5 @@ def rebuild_index(db: str, config: str):
         sys.exit(1)
 
 
-@cli.command()
-@click.option(
-    "--host",
-    default="127.0.0.1",
-    help="服务监听地址",
-)
-@click.option(
-    "--port",
-    default=8000,
-    type=int,
-    help="服务监听端口",
-)
-def serve(host: str, port: int):
-    """启动 FastAPI 服务"""
-    import uvicorn
-    from app.main import app
-
-    click.echo(f"正在启动服务: http://{host}:{port}")
-    click.echo(f"API 文档: http://{host}:{port}/docs")
-    uvicorn.run(app, host=host, port=port)
-
-
-@cli.command()
-@click.option(
-    "--share",
-    is_flag=True,
-    help="创建公共分享链接",
-)
-@click.option(
-    "--port",
-    default=7860,
-    type=int,
-    help="服务监听端口",
-)
-def ui(share: bool, port: int):
-    """启动 Gradio UI"""
-    from ui.gradio_app import launch
-
-    click.echo(f"正在启动 Gradio UI: http://127.0.0.1:{port}")
-    launch(share=share, server_port=port)
-
-
 if __name__ == "__main__":
-    cli()
+    main()

@@ -5,35 +5,40 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from app.models.session import SessionState, ConfirmedFact, DialogueMessage
-from app.core.hypothesis_tracker import HypothesisTracker
-from app.core.recommender import RecommendationEngine
-from app.core.response_generator import ResponseGenerator
-from app.services.session_service import SessionService
-from app.services.llm_service import LLMService
-from app.utils.config import Config
+from dbdiag.models.session import SessionState, ConfirmedFact, DialogueMessage
+from dbdiag.core.hypothesis_tracker import HypothesisTracker
+from dbdiag.core.recommender import RecommendationEngine
+from dbdiag.core.response_generator import ResponseGenerator
+from dbdiag.services.session_service import SessionService
+from dbdiag.services.llm_service import LLMService
+from dbdiag.utils.config import Config
 
 
 class DialogueManager:
     """对话管理器"""
 
-    def __init__(self, db_path: str, config: Config):
+    def __init__(
+        self,
+        db_path: str,
+        llm_service: LLMService,
+        embedding_service: Optional["EmbeddingService"] = None,
+    ):
         """
         初始化对话管理器
 
         Args:
             db_path: 数据库路径
-            config: 配置对象
+            llm_service: LLM 服务实例（单例）
+            embedding_service: Embedding 服务实例（单例，可选）
         """
         self.db_path = db_path
-        self.config = config
+        self.llm_service = llm_service
 
         # 初始化服务
         self.session_service = SessionService(db_path)
-        self.llm_service = LLMService(config)
-        self.hypothesis_tracker = HypothesisTracker(db_path, config)
-        self.recommender = RecommendationEngine(db_path)
-        self.response_generator = ResponseGenerator(db_path, self.llm_service)
+        self.hypothesis_tracker = HypothesisTracker(db_path, llm_service)
+        self.recommender = RecommendationEngine(db_path, llm_service)
+        self.response_generator = ResponseGenerator(db_path, llm_service)
 
     def start_conversation(self, user_problem: str) -> Dict[str, Any]:
         """
@@ -282,7 +287,7 @@ class DialogueManager:
 
             if is_feedback:
                 # 标记为已执行
-                from app.models.session import ExecutedStep
+                from dbdiag.models.session import ExecutedStep
 
                 session.executed_steps.append(
                     ExecutedStep(
@@ -302,7 +307,7 @@ class DialogueManager:
             ]
 
             if any(keyword in user_message.lower() for keyword in feedback_keywords):
-                from app.models.session import ExecutedStep
+                from dbdiag.models.session import ExecutedStep
 
                 session.executed_steps.append(
                     ExecutedStep(

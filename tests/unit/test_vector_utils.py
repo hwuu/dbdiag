@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.utils.vector_utils import serialize_f32, deserialize_f32, cosine_similarity
+from dbdiag.utils.vector_utils import serialize_f32, deserialize_f32, cosine_similarity
 
 
 class TestVectorUtils:

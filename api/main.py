@@ -2,8 +2,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.chat import router as chat_router
-from app.api.session import router as session_router
+from dbdiag.api.chat import router as chat_router
+from dbdiag.api.session import router as session_router
 
 # 创建 FastAPI 应用
 app = FastAPI(

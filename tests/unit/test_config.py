@@ -7,7 +7,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.utils.config import Config, LLMConfig, EmbeddingModelConfig, load_config
+from dbdiag.utils.config import Config, LLMConfig, EmbeddingModelConfig, load_config
 
 
 class TestConfigModels:

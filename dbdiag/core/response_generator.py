@@ -6,9 +6,9 @@ import sqlite3
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from app.models.step import DiagnosticStep
-from app.models.session import SessionState, Hypothesis
-from app.services.llm_service import LLMService
+from dbdiag.models.step import DiagnosticStep
+from dbdiag.models.session import SessionState, Hypothesis
+from dbdiag.services.llm_service import LLMService
 
 
 class ResponseGenerator:

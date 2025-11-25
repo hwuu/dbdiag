@@ -6,26 +6,24 @@ import sqlite3
 from typing import List, Optional, Set
 from pathlib import Path
 
-from app.models.step import DiagnosticStep
-from app.services.embedding_service import EmbeddingService
-from app.utils.vector_utils import deserialize_f32, cosine_similarity
-from app.utils.config import Config
+from dbdiag.models.step import DiagnosticStep
+from dbdiag.services.embedding_service import EmbeddingService
+from dbdiag.utils.vector_utils import deserialize_f32, cosine_similarity
 
 
 class StepRetriever:
     """步骤检索器"""
 
-    def __init__(self, db_path: str, config: Config):
+    def __init__(self, db_path: str, embedding_service: EmbeddingService = None):
         """
         初始化检索器
 
         Args:
             db_path: 数据库路径
-            config: 配置对象
+            embedding_service: Embedding 服务实例（单例，可选）
         """
         self.db_path = db_path
-        self.config = config
-        self.embedding_service = EmbeddingService(config)
+        self.embedding_service = embedding_service
 
     def retrieve(
         self,
@@ -57,37 +55,50 @@ class StepRetriever:
 
         try:
             # 1. 向量检索（语义相似）
-            query_embedding = self.embedding_service.encode(query)
+            if self.embedding_service:
+                query_embedding = self.embedding_service.encode(query)
 
-            # 获取所有有向量的步骤
-            cursor.execute(
-                """
-                SELECT
-                    step_id, ticket_id, step_index,
-                    observed_fact, observation_method, analysis_result,
-                    ticket_description, ticket_root_cause,
-                    fact_embedding
-                FROM diagnostic_steps
-                WHERE fact_embedding IS NOT NULL
-                """
-            )
+                # 获取所有有向量的步骤
+                cursor.execute(
+                    """
+                    SELECT
+                        step_id, ticket_id, step_index,
+                        observed_fact, observation_method, analysis_result,
+                        ticket_description, ticket_root_cause,
+                        fact_embedding
+                    FROM diagnostic_steps
+                    WHERE fact_embedding IS NOT NULL
+                    """
+                )
 
-            candidates = []
-            for row in cursor.fetchall():
-                step_id = row["step_id"]
-                fact_emb_blob = row["fact_embedding"]
+                candidates = []
+                for row in cursor.fetchall():
+                    step_id = row["step_id"]
+                    fact_emb_blob = row["fact_embedding"]
 
-                # 反序列化向量
-                fact_embedding = deserialize_f32(fact_emb_blob)
+                    # 反序列化向量
+                    fact_embedding = deserialize_f32(fact_emb_blob)
 
-                # 计算相似度
-                similarity = cosine_similarity(query_embedding, fact_embedding)
+                    # 计算相似度
+                    similarity = cosine_similarity(query_embedding, fact_embedding)
 
-                candidates.append((dict(row), similarity))
+                    candidates.append((dict(row), similarity))
 
-            # 按相似度排序，取 Top-N
-            candidates.sort(key=lambda x: x[1], reverse=True)
-            candidates = candidates[:vector_candidates]
+                # 按相似度排序，取 Top-N
+                candidates.sort(key=lambda x: x[1], reverse=True)
+                candidates = candidates[:vector_candidates]
+            else:
+                # 如果没有 embedding_service，使用关键词检索
+                cursor.execute(
+                    """
+                    SELECT
+                        step_id, ticket_id, step_index,
+                        observed_fact, observation_method, analysis_result,
+                        ticket_description, ticket_root_cause
+                    FROM diagnostic_steps
+                    """
+                )
+                candidates = [(dict(row), 0.5) for row in cursor.fetchall()[:vector_candidates]]
 
             # 2. 关键词过滤（如果提供）
             if keywords:
@@ -154,7 +165,7 @@ def get_default_retriever(config_path: Optional[str] = None) -> StepRetriever:
     Returns:
         StepRetriever 实例
     """
-    from app.utils.config import load_config
+    from dbdiag.utils.config import load_config
 
     config = load_config(config_path)
 

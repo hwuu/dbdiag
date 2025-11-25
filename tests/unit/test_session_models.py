@@ -7,7 +7,7 @@ import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.models.session import (
+from dbdiag.models.session import (
     ConfirmedFact,
     Hypothesis,
     ExecutedStep,

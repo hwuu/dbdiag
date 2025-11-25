@@ -9,7 +9,7 @@ from typing import Optional
 from datetime import datetime
 from pathlib import Path
 
-from app.models.session import SessionState
+from dbdiag.models.session import SessionState
 
 
 class SessionService:

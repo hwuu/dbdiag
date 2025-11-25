@@ -4,7 +4,7 @@
 """
 from typing import List, Dict, Optional
 import openai
-from app.utils.config import Config
+from dbdiag.utils.config import Config
 
 
 class LLMService:

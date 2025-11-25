@@ -7,28 +7,33 @@ import json
 from typing import List, Set, Dict
 from collections import defaultdict
 
-from app.models.session import SessionState, Hypothesis, ConfirmedFact
-from app.models.step import DiagnosticStep
-from app.core.retriever import StepRetriever
-from app.services.llm_service import LLMService
-from app.utils.config import Config
+from dbdiag.models.session import SessionState, Hypothesis, ConfirmedFact
+from dbdiag.models.step import DiagnosticStep
+from dbdiag.core.retriever import StepRetriever
+from dbdiag.services.llm_service import LLMService
+from dbdiag.services.embedding_service import EmbeddingService
 
 
 class HypothesisTracker:
     """假设追踪器"""
 
-    def __init__(self, db_path: str, config: Config):
+    def __init__(
+        self,
+        db_path: str,
+        llm_service: LLMService,
+        embedding_service: EmbeddingService = None,
+    ):
         """
         初始化假设追踪器
 
         Args:
             db_path: 数据库路径
-            config: 配置对象
+            llm_service: LLM 服务实例（单例）
+            embedding_service: Embedding 服务实例（单例，可选）
         """
         self.db_path = db_path
-        self.config = config
-        self.retriever = StepRetriever(db_path, config)
-        self.llm_service = LLMService(config)
+        self.llm_service = llm_service
+        self.retriever = StepRetriever(db_path, embedding_service) if embedding_service else StepRetriever(db_path)
 
     def update_hypotheses(
         self,
@@ -86,6 +91,25 @@ class HypothesisTracker:
             )
 
         # 3. 保留 Top-3 假设
+        hypotheses.sort(key=lambda h: h.confidence, reverse=True)
+
+        # 引入假设排他性：如果 Top-1 假设的置信度显著高于其他假设，降低其他假设的置信度
+        if len(hypotheses) > 1 and hypotheses[0].confidence > 0.65:
+            confidence_gap = hypotheses[0].confidence - hypotheses[1].confidence
+
+            # 如果 Top-1 显著领先（差距 > 0.15），大幅降低其他假设
+            if confidence_gap > 0.15:
+                penalty_factor = 0.7  # 降低到原来的 70%
+                for i in range(1, len(hypotheses)):
+                    hypotheses[i] = Hypothesis(
+                        root_cause=hypotheses[i].root_cause,
+                        confidence=hypotheses[i].confidence * penalty_factor,
+                        supporting_step_ids=hypotheses[i].supporting_step_ids,
+                        missing_facts=hypotheses[i].missing_facts,
+                        next_recommended_step_id=hypotheses[i].next_recommended_step_id,
+                    )
+
+        # 重新排序
         hypotheses.sort(key=lambda h: h.confidence, reverse=True)
         session.active_hypotheses = hypotheses[:3]
 

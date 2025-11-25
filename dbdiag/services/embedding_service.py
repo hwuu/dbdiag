@@ -4,7 +4,7 @@
 """
 from typing import List
 import openai
-from app.utils.config import Config
+from dbdiag.utils.config import Config
 
 
 class EmbeddingService:
