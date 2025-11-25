@@ -1,0 +1,16 @@
+# LLM 配置
+llm:
+  api_base: "http://localhost:11434/v1"
+  api_key: "sk-"
+  model: "Qwen/Qwen3-32B"
+  temperature: 0.2
+  max_tokens: 16384
+  system_prompt: |
+    你是一个问答助手，回答要简明扼要，使用中文，输出使用 markdown 格式。
+    如果有什么不确定的问题，要反问用户，不要自己猜。
+
+# Embedding 模型配置
+embedding_model:
+  api_base: "http://localhost:11435/v1"
+  api_key: "sk-"
+  model: "Qwen/Qwen3-Embedding-4B"
