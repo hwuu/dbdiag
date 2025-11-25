@@ -114,7 +114,7 @@ def ui(share: bool, port: int):
     """启动 Gradio UI"""
     from ui.gradio_app import launch
 
-    click.echo(f"正在启动 Gradio UI: http://0.0.0.0:{port}")
+    click.echo(f"正在启动 Gradio UI: http://127.0.0.1:{port}")
     launch(share=share, server_port=port)
 
 

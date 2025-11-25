@@ -207,7 +207,7 @@ def launch(share: bool = False, server_port: int = 7860):
     demo.launch(
         share=share,
         server_port=server_port,
-        server_name="0.0.0.0",
+        server_name="127.0.0.1",
         show_error=True,
     )
 
