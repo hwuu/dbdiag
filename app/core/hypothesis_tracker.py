@@ -10,6 +10,7 @@ from collections import defaultdict
 from app.models.session import SessionState, Hypothesis, ConfirmedFact
 from app.models.step import DiagnosticStep
 from app.core.retriever import StepRetriever
+from app.services.llm_service import LLMService
 from app.utils.config import Config
 
 
@@ -27,6 +28,7 @@ class HypothesisTracker:
         self.db_path = db_path
         self.config = config
         self.retriever = StepRetriever(db_path, config)
+        self.llm_service = LLMService(config)
 
     def update_hypotheses(
         self,
@@ -159,15 +161,10 @@ class HypothesisTracker:
             return 0.0
 
         # 1. 事实匹配度（权重 50%）
-        # 简化版：检查已确认事实中有多少能在步骤的 observed_fact 中找到
-        fact_texts = [f.fact.lower() for f in confirmed_facts]
-        matched_count = 0
-        for step in supporting_steps:
-            step_fact = step.observed_fact.lower()
-            if any(fact in step_fact or step_fact in fact for fact in fact_texts):
-                matched_count += 1
-
-        fact_coverage = matched_count / len(supporting_steps) if supporting_steps else 0
+        # 使用 LLM 判断事实是支持还是反对该假设
+        fact_score = self._evaluate_facts_for_hypothesis(
+            root_cause, supporting_steps, confirmed_facts
+        )
 
         # 2. 步骤执行进度（权重 30%）
         executed_step_ids = {s.step_id for s in executed_steps}
@@ -186,13 +183,130 @@ class HypothesisTracker:
 
         # 综合计算
         confidence = (
-            0.5 * fact_coverage
+            0.5 * fact_score
             + 0.3 * step_progress
             + 0.1 * frequency_score
             + 0.1 * relevance_score
         )
 
-        return min(confidence, 1.0)
+        return min(max(confidence, 0.0), 1.0)
+
+    def _evaluate_facts_for_hypothesis(
+        self,
+        root_cause: str,
+        supporting_steps: List[DiagnosticStep],
+        confirmed_facts: List[ConfirmedFact],
+    ) -> float:
+        """
+        使用 LLM 评估已确认事实对假设的支持程度
+
+        Args:
+            root_cause: 根因
+            supporting_steps: 支持该根因的步骤
+            confirmed_facts: 已确认事实
+
+        Returns:
+            事实评分（0-1），>0.5 表示支持，<0.5 表示反对
+        """
+        if not confirmed_facts:
+            return 0.5  # 无事实时返回中性分数
+
+        # 构建评估提示
+        system_prompt = """你是数据库诊断专家。请评估已确认的事实是否支持某个根因假设。
+
+规则:
+1. 正面事实（支持假设）：如果事实表明该根因可能存在，给正分（0.6-1.0）
+2. 负面事实（反对假设）：如果事实表明该根因不太可能，给负分（0.0-0.4）
+3. 中性事实（无关或不确定）：给中性分（0.5）
+4. 考虑多个事实的综合影响
+
+输出格式: 单个浮点数（0.0-1.0）
+例如: 0.8 表示强烈支持，0.2 表示强烈反对，0.5 表示中性"""
+
+        # 构建关键诊断步骤描述（用于提供上下文）
+        step_descriptions = []
+        for step in supporting_steps[:3]:  # 只取前 3 个步骤作为上下文
+            step_descriptions.append(f"- {step.observation_method}（期望观察: {step.observed_fact}）")
+
+        user_prompt = f"""根因假设: {root_cause}
+
+相关诊断步骤:
+{chr(10).join(step_descriptions)}
+
+已确认事实:
+{chr(10).join(f"- {fact.fact}" for fact in confirmed_facts)}
+
+请评估这些已确认事实对该根因假设的支持程度（0.0-1.0）:"""
+
+        try:
+            # 调用 LLM
+            response = self.llm_service.generate_simple(
+                user_prompt,
+                system_prompt=system_prompt,
+            )
+
+            # 解析评分
+            score_text = response.strip()
+            score = float(score_text)
+            return min(max(score, 0.0), 1.0)
+
+        except Exception as e:
+            # LLM 调用失败时的回退逻辑：使用简单的关键词匹配
+            return self._fallback_fact_evaluation(
+                root_cause, supporting_steps, confirmed_facts
+            )
+
+    def _fallback_fact_evaluation(
+        self,
+        root_cause: str,
+        supporting_steps: List[DiagnosticStep],
+        confirmed_facts: List[ConfirmedFact],
+    ) -> float:
+        """
+        回退方案：使用关键词匹配评估事实
+
+        Args:
+            root_cause: 根因
+            supporting_steps: 支持该根因的步骤
+            confirmed_facts: 已确认事实
+
+        Returns:
+            事实评分（0-1）
+        """
+        # 提取根因关键词（简化版：取根因中的名词）
+        root_cause_keywords = set(root_cause.lower().split())
+
+        positive_count = 0
+        negative_count = 0
+
+        for fact in confirmed_facts:
+            fact_lower = fact.fact.lower()
+
+            # 检查是否是负面表述
+            is_negative = any(
+                keyword in fact_lower
+                for keyword in ["正常", "没问题", "不存在", "无", "ok", "good"]
+            )
+
+            # 检查是否提到根因关键词
+            mentions_root_cause = any(
+                keyword in fact_lower for keyword in root_cause_keywords
+            )
+
+            if mentions_root_cause:
+                if is_negative:
+                    negative_count += 1  # 提到根因但说正常 -> 反对假设
+                else:
+                    positive_count += 1  # 提到根因且不正常 -> 支持假设
+
+        # 计算分数
+        total = positive_count + negative_count
+        if total == 0:
+            return 0.5  # 没有相关事实
+
+        # 负面事实降低分数
+        score = 0.5 + 0.3 * (positive_count - negative_count) / total
+        return min(max(score, 0.0), 1.0)
 
     def _identify_missing_facts(
         self,

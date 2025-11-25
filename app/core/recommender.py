@@ -39,6 +39,9 @@ class RecommendationEngine:
 
         top_hypothesis = session.active_hypotheses[0]
 
+        # 只排除已执行的步骤（用户做过的），不排除仅推荐过的步骤
+        excluded_step_ids = {s.step_id for s in session.executed_steps}
+
         # 阶段 1: 高置信度 -> 确认根因
         if top_hypothesis.confidence > 0.85:
             return self._generate_root_cause_confirmation(session, top_hypothesis)
@@ -54,7 +57,7 @@ class RecommendationEngine:
             next_step = self._find_discriminating_step(
                 session.active_hypotheses[0],
                 hypothesis2,
-                {s.step_id for s in session.executed_steps},
+                excluded_step_ids,
             )
 
             if next_step:
@@ -63,7 +66,7 @@ class RecommendationEngine:
         # 阶段 3: 低置信度 -> 多假设投票或主动询问
         common_steps = self._find_common_recommended_steps(
             session.active_hypotheses[:3],
-            {s.step_id for s in session.executed_steps},
+            excluded_step_ids,
         )
 
         if common_steps:

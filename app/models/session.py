@@ -51,6 +51,7 @@ class SessionState(BaseModel):
     confirmed_facts: List[ConfirmedFact] = []
     active_hypotheses: List[Hypothesis] = []
     executed_steps: List[ExecutedStep] = []
+    recommended_step_ids: List[str] = []  # 已推荐过的步骤 ID（避免重复推荐）
     dialogue_history: List[DialogueMessage] = []
 
     def to_dict(self) -> Dict[str, Any]:
