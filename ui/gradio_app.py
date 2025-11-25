@@ -101,7 +101,7 @@ def reset_session():
 def create_ui():
     """创建 Gradio UI"""
 
-    with gr.Blocks(title="数据库运维问题诊断助手", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="数据库运维问题诊断助手") as demo:
         gr.Markdown(
             """
         # 数据库运维问题诊断助手
