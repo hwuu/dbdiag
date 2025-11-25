@@ -221,6 +221,380 @@ class Hypothesis(BaseModel):
 
 ---
 
+## 完整意图分类体系
+
+通过对真实诊断场景的深入分析，我们识别出以下完整的用户意图类型：
+
+**编号规则**：
+- **I-101 ~ I-1xx**: 核心意图（重要且阻塞）
+- **I-201 ~ I-2xx**: 重要但非阻塞
+- **I-301 ~ I-3xx**: 增强体验/高级对话
+- **I-901 ~ I-9xx**: 元意图
+
+---
+
+### 核心意图（重要且阻塞）
+
+#### I-101. feedback（诊断反馈）✅ 已实现
+**场景**：用户报告诊断步骤的执行结果
+```
+"IO 正常"
+"CPU 使用率 95%"
+"慢查询日志显示全表扫描"
+```
+**特征**：包含具体的观察数据或检查结果
+**处理**：提取事实，标记步骤已执行，更新假设
+
+---
+
+#### I-102. query（系统查询）
+**场景**：询问系统状态或诊断进展
+```
+"现在咱们都检查了什么了？"
+"根据现有的检查结果，可以有什么结论？"
+"还有哪些假设没排除？"
+```
+**特征**：询问诊断进展、假设状态、已完成的工作
+**处理**：生成总结响应，不推荐新步骤
+**与其他意图的区别**：关注**系统状态**而非操作方法
+
+---
+
+#### I-105. correction（修正陈述）
+**场景**：用户修正之前说过的内容
+```
+"之前说 IO 正常是我看错了，其实 IO 等待很高"
+"抱歉，刚才那个 CPU 数据不对，应该是 50%"
+```
+**特征**：明确表示修正，通常包含"之前"、"刚才"、"不对"等词
+**处理**：删除旧事实，添加新事实，重新评估假设
+
+---
+
+### 重要但非阻塞
+
+#### I-201. suggestion（方向建议）
+**场景**：用户建议或怀疑某个诊断方向
+```
+"会不会是磁盘的问题？"
+"我怀疑是网络配置的问题"
+"这个表现像是死锁"
+```
+**特征**：包含疑问或主观判断，不是客观观察
+**处理**：临时提升相关假设优先级，在响应中确认
+
+---
+
+#### I-103. clarification_request（请求澄清）⭐ 新增
+**场景**：用户不理解推荐的诊断步骤，需要操作指导
+```
+"这个命令怎么执行？"
+"SHOW ENGINE INNODB STATUS 是什么意思？"
+"pg_stat_activity 这个表在哪里？"
+"我不知道怎么检查 IO 等待"
+```
+**特征**：询问"怎么"、"如何"、"什么意思"
+**处理**：
+- 提供详细的操作指南
+- 不推荐新步骤
+- 不标记为已执行
+
+**与 query 的区别**：
+- `query` 询问**系统状态**（"检查了什么？"）
+- `clarification_request` 询问**如何操作**（"怎么检查？"）
+
+**响应示例**：
+````markdown
+**操作指南：检查 IO 等待**
+
+1. 登录数据库服务器
+2. 执行以下命令：
+   ```bash
+   iostat -x 1 10
+   ```
+3. 观察 %util 列：
+   - < 50%：IO 负载正常
+   - 50-80%：IO 负载较高
+   - > 80%：IO 瓶颈
+
+如果您的环境中没有 iostat，也可以：
+- 方案 2：查看系统监控工具
+- 方案 3：检查数据库慢查询日志
+
+准备好后，请告诉我检查结果。
+````
+
+---
+
+#### I-104. unable_to_execute（无法执行）⭐ 新增
+**场景**：用户遇到执行障碍，无法完成推荐的步骤
+```
+"我没有权限执行这个命令"
+"这个表不存在"
+"我们用的是 MySQL，不是 PostgreSQL"
+"生产环境不允许执行这个操作"
+```
+**特征**：明确表示无法执行，包含"没有"、"不能"、"不允许"等否定词
+**处理**：
+- **不标记为已执行**（因为根本没执行）
+- 寻找替代诊断方法
+- 或降低该假设的优先级（如果无法验证）
+
+**响应示例**：
+```markdown
+了解，您无法执行该命令。让我为您提供替代方案：
+
+**方案 1：检查慢查询日志文件**
+- 路径：/var/log/mysql/slow.log
+- 无需数据库权限
+
+**方案 2：使用 performance_schema**（如果可用）
+- 需要 PROCESS 权限
+
+**方案 3：通过应用层监控**
+- 如果有 APM 工具（如 New Relic）
+
+您可以尝试哪种方案？或者告诉我您有哪些权限，我重新评估诊断策略。
+```
+
+---
+
+### 重要但非阻塞
+
+#### I-201. suggestion（方向建议）
+**场景**：用户建议或怀疑某个诊断方向
+```
+"会不会是磁盘的问题？"
+"我怀疑是网络配置的问题"
+"这个表现像是死锁"
+```
+**特征**：包含疑问或主观判断，不是客观观察
+**处理**：临时提升相关假设优先级，在响应中确认
+
+---
+
+#### I-202. hypothesis_rejection（假设拒绝）
+**场景**：用户基于先验知识排除某个假设
+```
+"不可能是磁盘问题，磁盘刚换的新的"
+"肯定不是网络，我们在内网"
+"这个方向不对"
+```
+**处理**：
+- 大幅降低被拒绝假设的置信度
+- 确认接受用户判断
+- 转向其他假设
+
+**与 correction 的区别**：
+- `correction` 修正**之前说过的话**（基于新观察）
+- `hypothesis_rejection` 排除**某个可能性**（基于先验知识）
+
+---
+
+#### I-203. partial_feedback（部分反馈）
+**场景**：用户执行了步骤，但结果不完整
+```
+"命令执行了，但是输出太长了，我只看到前几行"
+"有一部分数据，但是不完整"
+"命令执行了一半就超时了"
+```
+**处理**：标记为"部分执行"，根据部分信息做有限度判断
+
+---
+
+#### I-204. confirmation（确认/否定）
+**场景**：简短的确认或否定回答
+```
+"是的" / "不是"
+"对" / "没有"
+"确认"
+```
+**特征**：非常简短，需要**结合上下文**理解
+**处理**：
+- 查看系统上一轮是否提出了 yes/no 问题
+- 将确认转化为具体事实
+
+**示例**：
+```
+系统: "您的数据库是否启用了慢查询日志？"
+用户: "是的"
+→ 转化为事实: "慢查询日志已启用"
+```
+
+---
+
+### 增强体验/高级对话
+
+#### I-301. urgency_expression（表达紧急性）
+**场景**：表达时间压力或焦虑情绪
+```
+"这个问题很严重，影响了生产环境"
+"客户在催了，能不能快点？"
+"能不能直接告诉我是什么问题？"
+```
+**处理**：
+- 识别情绪，给予理解
+- 调整策略：
+  - 优先推荐**快速诊断**步骤
+  - 直接给出**最可能的根因**（即使置信度不高）
+  - 提供**应急缓解方案**
+
+**响应示例**：
+```markdown
+我理解问题的紧急性。基于目前信息，最可能的原因是 X（置信度 65%）。
+
+**应急缓解方案**（立即执行）：
+1. 重启相关服务（临时缓解）
+2. 调整参数 Y 为 Z
+
+**快速验证**（2分钟内完成）：
+执行命令：SELECT ...
+如果结果显示 W，则可以确认是 X 问题。
+
+我们可以在缓解问题后再做详细诊断。您先尝试缓解方案，有结果立即告诉我。
+```
+
+---
+
+### 增强体验/高级对话
+
+#### I-302. context_reference（上下文引用）
+**场景**：使用代词或指示词引用之前的内容
+```
+"刚才那个命令的结果是..."
+"之前你推荐的那个步骤"
+"第一个假设"
+"上面提到的表"
+```
+**处理**：使用 LLM 解析引用对象，替换为具体实体后正常处理
+
+---
+
+#### I-303. multi_issue（多问题报告）
+**场景**：报告多个独立的问题
+```
+"不仅查询慢，而且连接也经常断开"
+"还有一个问题，日志显示很多错误"
+```
+**处理**：识别多个问题，询问优先级或判断是否同一根因
+
+---
+
+#### I-304. seek_explanation（寻求解释）
+**场景**：询问根本原因或机制
+```
+"为什么会出现这个问题？"
+"这是什么原因导致的？"
+"能解释一下这个现象吗？"
+```
+**处理**：在响应中添加教育性内容，解释机制
+
+---
+
+#### I-305. chit_chat（闲聊/礼貌用语）
+**场景**：纯粹的社交性回应
+```
+"谢谢" / "辛苦了"
+"好的，我知道了"
+"嗯嗯" / "OK"
+```
+**处理**：简单确认，继续推荐下一步
+
+---
+
+### 元意图
+
+#### I-901. mixed（混合意图）
+包含以上任意多个意图的组合，需要分段处理。
+
+---
+
+## 意图优先级与分层处理
+
+### 分层处理策略
+
+**Layer 1（预处理层）**：
+处理简单、可用规则识别的意图
+- `chit_chat`（I-305. 礼貌用语，简单规则）
+- `confirmation`（I-204. 需要上下文）
+- `context_reference`（I-302. 解析引用后传递）
+
+**Layer 2（核心意图层）**：
+处理主要的诊断交互意图
+- `feedback`（I-101. 诊断反馈）
+- `query`（I-102. 系统查询）
+- `correction`（I-105. 修正陈述）
+- `clarification_request`（I-103. 请求澄清）
+- `unable_to_execute`（I-104. 无法执行）
+
+**Layer 3（特殊处理层）**：
+影响推荐策略或假设评估的意图
+- `suggestion`（I-201. 方向建议）
+- `urgency_expression`（I-301. 紧急性）
+- `hypothesis_rejection`（I-202. 假设拒绝）
+- `partial_feedback`（I-203. 部分反馈）
+
+**元意图**：
+- `mixed`（I-901. 混合意图）- 跨层处理，根据包含的子意图分别处理
+
+---
+
+## 实施优先级
+
+### Phase 1 核心功能（必须实现）
+
+**包含意图**：
+- I-101. ✅ `feedback` - 诊断反馈（已实现）
+- I-102. `query` - 系统查询
+- I-103. `clarification_request` - 请求澄清 ⭐
+- I-104. `unable_to_execute` - 无法执行 ⭐
+- I-105. `correction` - 修正陈述
+- I-901. `mixed` - 混合意图（基础支持）
+
+**理由**：
+- 这 6 个意图涵盖了 **80% 的真实场景**
+- `clarification_request` 和 `unable_to_execute` 是用户体验的关键痛点
+- 必须在 Phase 1 解决
+
+**预计工作量**：3-4 天
+
+---
+
+### Phase 2 增强功能（重要但非紧急）
+
+**包含意图**：
+- I-201. `suggestion` - 方向建议
+- I-202. `hypothesis_rejection` - 假设拒绝
+- I-203. `partial_feedback` - 部分反馈
+- I-204. `confirmation` - 确认/否定
+
+**理由**：
+- 提升系统智能性
+- 改善用户体验
+- 覆盖剩余 15% 的场景
+
+**预计工作量**：2-3 天
+
+---
+
+### Phase 3 高级功能（锦上添花）
+
+**包含意图**：
+- I-301. `urgency_expression` - 表达紧急性
+- I-302. `context_reference` - 上下文引用
+- I-303. `multi_issue` - 多问题报告
+- I-304. `seek_explanation` - 寻求解释
+- I-305. `chit_chat` - 闲聊/礼貌用语
+
+**理由**：
+- 高级对话能力
+- 情感智能
+- 覆盖最后 5% 的场景
+
+**预计工作量**：3-5 天
+
+---
+
 ## 完整设计方案
 
 ### 阶段 1：意图识别（核心）
@@ -509,51 +883,255 @@ def _calculate_suggestion_similarity(
 
 ---
 
-## 实施计划
+## 实施计划（更新版）
 
-### Phase 1 - 核心功能（高优先级）
+### Phase 1 - 核心功能（高优先级）⭐
 
-**目标**: 解决最关键的用户体验问题
+**目标**: 解决最关键的用户体验问题，覆盖 80% 的真实场景
 
-**包含**：
-- ✅ 意图识别（区分 feedback/query/suggestion/correction）
-- ✅ 查询类问题的总结响应
-- ✅ 修正机制（"之前说错了"）
+**包含意图**：
+- I-101. ✅ `feedback` - 诊断反馈（已实现）
+- I-102. `query` - 系统查询
+- I-103. `clarification_request` - 请求澄清 ⭐ 新增
+- I-104. `unable_to_execute` - 无法执行 ⭐ 新增
+- I-105. `correction` - 修正陈述
+- I-901. `mixed` - 混合意图（基础支持）
 
-**预计工作量**: 2-3 天
+**预计工作量**: 3-4 天
+
+**实现内容**：
+- 意图识别 LLM prompt 设计
+- 查询类问题的总结响应生成
+- 修正机制（删除旧事实，添加新事实）
+- 澄清请求的详细指导生成
+- 无法执行时的替代方案推荐
+- 分层处理流程（Layer 1/2/3）
 
 **验收标准**：
-- 用户询问"检查了什么？"时，系统能生成总结而非推荐新步骤
-- 用户修正"之前说错了，实际是X"时，系统能更新事实并重新评估
-- E2E 测试覆盖这些场景
+- ✅ 用户询问"检查了什么？"时，生成总结而非推荐新步骤
+- ✅ 用户修正"之前说错了，实际是X"时，更新事实并重新评估
+- ✅ 用户询问"怎么执行这个命令？"时，提供详细操作指南
+- ✅ 用户说"没有权限"时，提供替代方案
+- ✅ 混合输入（如"IO 正常，怎么检查 CPU？"）能正确分段处理
+- ✅ E2E 测试覆盖所有 6 个意图类型
 
 ---
 
 ### Phase 2 - 增强功能（中优先级）
 
-**目标**: 提升系统智能性和用户友好度
+**目标**: 提升系统智能性和用户友好度，覆盖剩余 15% 场景
 
-**包含**：
-- ✅ 用户建议的处理（"会不会是X问题？"）
-- ✅ 混合输入的分段处理
-- ✅ 响应中回答用户问题
+**包含意图**：
+- I-201. `suggestion` - 方向建议
+- I-202. `hypothesis_rejection` - 假设拒绝
+- I-203. `partial_feedback` - 部分反馈
+- I-204. `confirmation` - 确认/否定
 
-**预计工作量**: 1-2 天
+**预计工作量**: 2-3 天
+
+**实现内容**：
+- 用户建议的临时假设加成机制
+- 上下文相关的确认转化
+- 假设拒绝的置信度调整
+- 部分反馈的有限度判断
 
 **验收标准**：
-- 用户建议"会不会是磁盘问题"时，系统提升相关假设优先级并在响应中确认
-- 混合输入能被正确分段处理
-- 响应包含对用户问题的回答
+- ✅ 用户建议"会不会是磁盘问题"时，提升相关假设优先级
+- ✅ 用户简短回答"是的"时，能结合上下文转化为具体事实
+- ✅ 用户说"不可能是X"时，大幅降低该假设置信度
+- ✅ 用户提供部分信息时，系统能基于有限信息做判断
 
 ---
 
 ### Phase 3 - 高级功能（低优先级）
 
-**目标**: 支持更复杂的对话模式
+**目标**: 支持更复杂的对话模式和情感智能，覆盖最后 5% 场景
 
-**包含**：
-- ✅ 上下文引用处理（"刚才那个"、"之前提到的"）
-- ✅ 多轮澄清对话
+**包含意图**：
+- I-301. `urgency_expression` - 表达紧急性
+- I-302. `context_reference` - 上下文引用
+- I-303. `multi_issue` - 多问题报告
+- I-304. `seek_explanation` - 寻求解释
+- I-305. `chit_chat` - 闲聊/礼貌用语
+
+**预计工作量**: 3-5 天
+
+**实现内容**：
+- 代词和指示词的引用解析
+- 紧急情况的快速诊断策略
+- 多问题的优先级判断
+- 教育性内容生成
+- 社交性回应
+
+**验收标准**：
+- ✅ 用户使用"刚才那个"时，系统能解析引用对象
+- ✅ 用户表达紧急性时，提供快速诊断和缓解方案
+- ✅ 用户报告多个问题时，能识别并询问优先级
+- ✅ 用户询问"为什么"时，提供机制解释
+
+---
+
+## Phase 1 详细实施计划
+
+### 1. 意图识别模型设计
+
+**UserIntent 数据模型**：
+```python
+class UserIntent(BaseModel):
+    """用户意图分类"""
+    intent_type: str  # "feedback" | "query" | "correction" |
+                      # "clarification_request" | "unable_to_execute" | "mixed"
+
+    # 各类内容
+    facts: List[str] = []                    # 陈述的事实
+    questions: List[str] = []                # 提出的问题
+    corrections: List[Dict[str, str]] = []   # 修正内容
+    clarifications: List[str] = []           # 请求澄清的内容
+    obstacles: List[str] = []                # 执行障碍
+
+    # 标记
+    has_execution_feedback: bool = False
+    needs_summary: bool = False
+    needs_clarification: bool = False
+    needs_alternatives: bool = False
+
+    # 置信度
+    confidence: float = 1.0
+```
+
+**LLM Prompt 设计**：
+```python
+system_prompt = """你是用户意图分析助手。分析数据库诊断对话中的用户意图。
+
+意图类型：
+
+1. feedback（诊断反馈）
+   特征：报告诊断步骤的执行结果
+   示例："IO 正常"、"CPU 使用率 95%"
+
+2. query（系统查询）
+   特征：询问诊断进展或系统状态
+   示例："检查了什么？"、"有什么结论？"
+
+3. correction（修正陈述）
+   特征：修正之前说过的内容
+   示例："之前说错了，实际上..."
+
+4. clarification_request（请求澄清）
+   特征：询问如何操作或不理解推荐步骤
+   示例："这个命令怎么执行？"、"什么意思？"
+
+5. unable_to_execute（无法执行）
+   特征：遇到执行障碍，无法完成推荐步骤
+   示例："没有权限"、"这个表不存在"
+
+6. mixed（混合意图）
+   特征：包含多种意图
+
+输出格式：JSON
+{
+  "intent_type": "...",
+  "facts": [...],
+  "questions": [...],
+  "corrections": [{"original": "...", "corrected": "..."}],
+  "clarifications": [...],
+  "obstacles": [...],
+  "has_execution_feedback": true/false,
+  "needs_summary": true/false,
+  "needs_clarification": true/false,
+  "needs_alternatives": true/false,
+  "confidence": 0.95
+}
+"""
+```
+
+### 2. 分层处理流程
+
+**处理顺序**：
+1. **预处理** → 解析引用、识别简单意图
+2. **意图识别** → LLM 分类
+3. **内容提取** → 提取事实、问题、修正等
+4. **状态更新** → 更新 facts、executed_steps
+5. **响应生成** → 根据意图类型生成响应
+
+**代码结构**：
+```python
+def continue_conversation(self, session_id: str, user_message: str):
+    session = self.session_service.get_session(session_id)
+
+    # 1. 意图识别
+    intent = self._classify_user_intent(user_message, session)
+
+    # 2. 处理修正（优先级最高）
+    if intent.corrections:
+        self._handle_corrections(intent.corrections, session)
+
+    # 3. 提取事实
+    if intent.facts:
+        new_facts = self._extract_facts(intent.facts, session)
+        session.confirmed_facts.extend(new_facts)
+
+    # 4. 标记已执行步骤
+    if intent.has_execution_feedback:
+        self._mark_executed_steps_from_feedback(user_message, session)
+
+    # 5. 更新假设
+    session = self.hypothesis_tracker.update_hypotheses(session)
+
+    # 6. 根据意图类型生成响应
+    if intent.needs_summary:
+        response = self._generate_summary_response(session, intent.questions)
+    elif intent.needs_clarification:
+        response = self._generate_clarification_response(session, intent.clarifications)
+    elif intent.needs_alternatives:
+        response = self._generate_alternatives_response(session, intent.obstacles)
+    else:
+        recommendation = self.recommender.recommend_next_action(session)
+        response = self.response_generator.generate_response(session, recommendation)
+
+    # 7. 保存会话
+    session.dialogue_history.append(DialogueMessage(role="user", content=user_message))
+    session.dialogue_history.append(DialogueMessage(role="assistant", content=response["message"]))
+    self.session_service.update_session(session)
+
+    return response
+```
+
+### 3. 测试用例设计
+
+**E2E 测试场景**：
+```python
+# tests/e2e/test_intent_recognition.py
+
+def test_query_intent():
+    """测试系统查询意图"""
+    # 用户: "检查了什么？"
+    # 期望: 生成总结响应，不推荐新步骤
+
+def test_correction_intent():
+    """测试修正陈述意图"""
+    # 用户: "之前说 IO 正常是错的，实际是 IO 很高"
+    # 期望: 更新事实，重新评估假设
+
+def test_clarification_request_intent():
+    """测试请求澄清意图"""
+    # 用户: "这个命令怎么执行？"
+    # 期望: 提供详细操作指南
+
+def test_unable_to_execute_intent():
+    """测试无法执行意图"""
+    # 用户: "我没有权限"
+    # 期望: 提供替代方案
+
+def test_mixed_intent():
+    """测试混合意图"""
+    # 用户: "IO 正常，怎么检查 CPU？"
+    # 期望: 标记 IO 已执行，提供 CPU 检查指南
+```
+
+---
+
+## 成本分析
 - ✅ 主动提问策略优化
 
 **预计工作量**: 3-5 天
@@ -698,7 +1276,7 @@ class UserIntent(BaseModel):
 
 - [Multi-turn Dialogue Management](https://arxiv.org/abs/2108.08877)
 - [Intent Recognition in Task-oriented Dialogue](https://arxiv.org/abs/1902.10909)
-- [Error Correction in Conversational AI](https://arxiv.org/abs/2104.08763)
+- [Error Correction in Conversational AI](https://arxiv.org/abs/2I-104.08763)
 
 ---
 
