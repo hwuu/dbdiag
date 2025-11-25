@@ -14,4 +14,4 @@ embedding_model:
   api_base: "http://localhost:11435/v1"
   api_key: "sk-"
   model: "Qwen/Qwen3-Embedding-4B"
-  dimension: 1024  # 向量维度
+  dimension: 2560  # 向量维度（Qwen3-Embedding-4B 为 2560）

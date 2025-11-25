@@ -66,9 +66,14 @@ def import_data(data: str, db: str):
 )
 def rebuild_index(db: str, config: str):
     """重建向量索引（调用 Embedding API 生成向量）"""
-    click.echo("TODO: 实现向量索引重建功能")
-    # from scripts.build_embeddings import build_embeddings
-    # build_embeddings(db, config)
+    from scripts.build_embeddings import build_embeddings
+
+    try:
+        build_embeddings(db, config)
+        click.echo("\n[OK] 向量索引重建成功")
+    except Exception as e:
+        click.echo(f"\n[ERROR] 重建失败: {e}", err=True)
+        sys.exit(1)
 
 
 @cli.command()

@@ -6,6 +6,9 @@ click>=8.0.0
 # OpenAI SDK（兼容 API）
 openai>=1.0.0
 
+# 进度条
+tqdm>=4.65.0
+
 # Web 框架（后续 Phase 3 使用）
 fastapi>=0.100.0
 uvicorn>=0.23.0
