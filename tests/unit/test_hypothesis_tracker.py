@@ -4,15 +4,14 @@ import sqlite3
 import tempfile
 import os
 import json
-import warnings
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.init_db import init_database
-from dbdiag.models.session import SessionState, ConfirmedFact, ConfirmedPhenomenon, Hypothesis
+from dbdiag.models.session import SessionState, ConfirmedPhenomenon, Hypothesis
 from dbdiag.utils.vector_utils import serialize_f32
 
 
@@ -180,32 +179,6 @@ class TestPhenomenonHypothesisTracker:
                 assert hasattr(hypothesis, 'supporting_phenomenon_ids')
                 assert hasattr(hypothesis, 'supporting_ticket_ids')
                 assert hasattr(hypothesis, 'next_recommended_phenomenon_id')
-
-
-class TestHypothesisTrackerDeprecated:
-    """HypothesisTracker deprecated 测试"""
-
-    def test_hypothesis_tracker_triggers_warning(self):
-        """测试:HypothesisTracker 应触发 deprecation 警告"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test.db")
-            init_database(db_path)
-
-            mock_llm = Mock()
-
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-
-                from dbdiag.core.hypothesis_tracker import HypothesisTracker
-                tracker = HypothesisTracker(db_path, mock_llm)
-
-                # 验证触发了 deprecation 警告
-                deprecation_warnings = [
-                    warning for warning in w
-                    if issubclass(warning.category, DeprecationWarning)
-                ]
-                # 至少有一个 deprecation 警告（可能来自 StepRetriever）
-                assert len(deprecation_warnings) >= 1
 
 
 if __name__ == "__main__":

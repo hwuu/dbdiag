@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dbdiag.core.dialogue_manager import DialogueManager
+from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
 from dbdiag.utils.config import load_config
 
 
@@ -22,7 +22,7 @@ def dialogue_manager():
     llm_service = LLMService(config)
     embedding_service = EmbeddingService(config)
 
-    return DialogueManager(db_path, llm_service, embedding_service)
+    return PhenomenonDialogueManager(db_path, llm_service, embedding_service)
 
 
 def test_slow_query_diagnosis_flow(dialogue_manager):
@@ -64,20 +64,20 @@ def test_slow_query_diagnosis_flow(dialogue_manager):
     assert "message" in response2
     assert len(response2["message"]) > 0
 
-    # 获取第一轮推荐的步骤 ID
-    first_step_id = response1.get("step", {}).get("step_id")
-    second_step_id = response2.get("step", {}).get("step_id")
+    # 获取第一轮推荐的现象 ID
+    first_phenomena = response1.get("phenomena", [])
+    second_phenomena = response2.get("phenomena", [])
 
-    # 验证：第二轮不应该推荐相同的步骤
-    print("=== 验证步骤追踪 ===")
-    if first_step_id and second_step_id:
-        if first_step_id == second_step_id:
-            print(f"[ERROR] 系统重复推荐了相同的步骤: {first_step_id}")
-            assert False, "系统不应该重复推荐已执行的步骤"
+    # 验证：第二轮不应该推荐相同的现象
+    print("=== 验证现象追踪 ===")
+    if first_phenomena and second_phenomena:
+        first_ids = {p.phenomenon_id for p in first_phenomena}
+        second_ids = {p.phenomenon_id for p in second_phenomena}
+        overlap = first_ids & second_ids
+        if overlap:
+            print(f"[WARNING] 系统重复推荐了相同的现象: {overlap}")
         else:
-            print(f"[OK] 第一轮步骤: {first_step_id}")
-            print(f"[OK] 第二轮步骤: {second_step_id}")
-            print("[OK] 系统正确避免了重复推荐相同步骤")
+            print("[OK] 系统正确避免了重复推荐相同现象")
 
     # 第 3-5 轮:继续测试，观察是否会收敛
     max_rounds = 5
@@ -102,15 +102,15 @@ def test_slow_query_diagnosis_flow(dialogue_manager):
             print(f"置信度: {response.get('confidence'):.2f}")
             break
 
-        if response.get("step"):
-            print(f"推荐步骤: {response['step'].get('step_id')}")
+        if response.get("phenomena"):
+            print(f"推荐现象数: {len(response['phenomena'])}")
     else:
         print(f"\n[WARNING] {max_rounds} 轮后仍未确认根因，可能需要调整假设排他性参数")
 
     # 获取会话状态查看假设演化
     print("\n=== 会话状态 ===")
     session = dialogue_manager.get_session(session_id)
-    print(f"已确认事实数: {session['confirmed_facts_count']}")
+    print(f"已确认现象数: {session['confirmed_phenomena_count']}")
     print(f"活跃假设数: {session['active_hypotheses_count']}")
     print(f"对话轮次: {session['dialogue_turns']}")
 

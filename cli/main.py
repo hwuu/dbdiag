@@ -74,7 +74,8 @@ class CLI:
                     continue
 
                 # 处理诊断消息
-                self._handle_diagnosis_message(user_input)
+                if self._handle_diagnosis_message(user_input):
+                    break  # 根因已定位，退出
 
         except KeyboardInterrupt:
             # Ctrl+C
@@ -127,12 +128,15 @@ class CLI:
             print(self.formatter.format_error(f"未知命令: {command}，输入 /help 查看可用命令"))
             return False
 
-    def _handle_diagnosis_message(self, user_message: str):
+    def _handle_diagnosis_message(self, user_message: str) -> bool:
         """
         处理诊断消息
 
         Args:
             user_message: 用户消息
+
+        Returns:
+            是否已定位根因（True 则退出程序）
         """
         try:
             # 轮次分隔
@@ -157,8 +161,16 @@ class CLI:
             # 显示轮次 summary
             self._print_round_summary()
 
+            # 检查是否已定位根因
+            if response.get("action") == "confirm_root_cause":
+                print("诊断完成，再见！\n")
+                return True
+
+            return False
+
         except Exception as e:
             print(self.formatter.format_error(f"处理失败: {str(e)}"))
+            return False
 
     def _format_and_print_response(self, response: dict):
         """
@@ -192,7 +204,6 @@ class CLI:
 
         print("\n" + "─" * 50)
         print(f"[Summary] 第 {self.round_count} 轮完成")
-        print(f"  已确认事实: {len(session.confirmed_facts)}")
         print(f"  已确认现象: {len(session.confirmed_phenomena)}")
 
         if session.active_hypotheses:
