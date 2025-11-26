@@ -1,6 +1,11 @@
 """数据库初始化脚本
 
 创建 SQLite 数据库的所有表结构
+
+V2 架构变更：
+- 新增原始数据表：raw_tickets, raw_anomalies
+- 新增处理后数据表：phenomena, ticket_anomalies
+- 保留 V1 表（diagnostic_steps）用于向后兼容，标记为 deprecated
 """
 import sqlite3
 from pathlib import Path
@@ -9,7 +14,96 @@ from typing import Optional
 
 # 数据库 schema SQL
 SCHEMA_SQL = """
--- 工单表
+-- ============================================
+-- V2 原始数据表（专家标注的原始数据）
+-- ============================================
+
+-- 原始工单表
+CREATE TABLE IF NOT EXISTS raw_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    metadata_json TEXT,                -- JSON: {"version": "...", "module": "...", "severity": "..."}
+    description TEXT NOT NULL,         -- 问题描述
+    root_cause TEXT NOT NULL,          -- 根因
+    solution TEXT NOT NULL,            -- 解决方案
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 原始异常表
+CREATE TABLE IF NOT EXISTS raw_anomalies (
+    id TEXT PRIMARY KEY,                       -- 格式: {ticket_id}_anomaly_{index}
+    ticket_id TEXT NOT NULL,
+    anomaly_index INTEGER NOT NULL,            -- 异常在工单中的序号
+    description TEXT NOT NULL,                 -- 原始异常描述
+    observation_method TEXT NOT NULL,          -- 原始观察方法
+    why_relevant TEXT NOT NULL,                -- 原始相关性解释
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ticket_id) REFERENCES raw_tickets(ticket_id)
+);
+
+-- 为 raw_anomalies 创建索引
+CREATE INDEX IF NOT EXISTS idx_raw_anomalies_ticket_id ON raw_anomalies(ticket_id);
+
+-- ============================================
+-- V2 处理后数据表（聚类标准化后的数据）
+-- ============================================
+
+-- 标准现象表（核心表，聚类去重后的标准化现象）
+CREATE TABLE IF NOT EXISTS phenomena (
+    phenomenon_id TEXT PRIMARY KEY,            -- 格式: P-{序号}，如 P-0001
+    description TEXT NOT NULL,                 -- 标准化描述（LLM 生成）
+    observation_method TEXT NOT NULL,          -- 标准观察方法（选最佳）
+    source_anomaly_ids TEXT NOT NULL,          -- 来源的原始 anomaly IDs（JSON 数组）
+    cluster_size INTEGER NOT NULL,             -- 聚类中的异常数量
+    embedding BLOB,                            -- 向量表示
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 工单-现象关联表
+CREATE TABLE IF NOT EXISTS ticket_anomalies (
+    id TEXT PRIMARY KEY,                       -- 格式: {ticket_id}_anomaly_{index}
+    ticket_id TEXT NOT NULL,
+    phenomenon_id TEXT NOT NULL,               -- 关联的标准现象
+    why_relevant TEXT NOT NULL,                -- 该工单上下文中的相关性解释
+    raw_anomaly_id TEXT,                       -- 关联的原始异常ID（用于溯源）
+    FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id),
+    FOREIGN KEY (phenomenon_id) REFERENCES phenomena(phenomenon_id),
+    FOREIGN KEY (raw_anomaly_id) REFERENCES raw_anomalies(id)
+);
+
+-- 为 ticket_anomalies 创建索引
+CREATE INDEX IF NOT EXISTS idx_ticket_anomalies_ticket_id ON ticket_anomalies(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_anomalies_phenomenon_id ON ticket_anomalies(phenomenon_id);
+
+-- 现象全文检索虚拟表
+CREATE VIRTUAL TABLE IF NOT EXISTS phenomena_fts USING fts5(
+    phenomenon_id UNINDEXED,
+    description,
+    observation_method,
+    content=phenomena,
+    content_rowid=rowid
+);
+
+-- 现象全文检索触发器（保持 FTS 同步）
+CREATE TRIGGER IF NOT EXISTS phenomena_ai AFTER INSERT ON phenomena BEGIN
+    INSERT INTO phenomena_fts(rowid, phenomenon_id, description, observation_method)
+    VALUES (new.rowid, new.phenomenon_id, new.description, new.observation_method);
+END;
+
+CREATE TRIGGER IF NOT EXISTS phenomena_ad AFTER DELETE ON phenomena BEGIN
+    DELETE FROM phenomena_fts WHERE rowid = old.rowid;
+END;
+
+CREATE TRIGGER IF NOT EXISTS phenomena_au AFTER UPDATE ON phenomena BEGIN
+    DELETE FROM phenomena_fts WHERE rowid = old.rowid;
+    INSERT INTO phenomena_fts(rowid, phenomenon_id, description, observation_method)
+    VALUES (new.rowid, new.phenomenon_id, new.description, new.observation_method);
+END;
+
+-- ============================================
+-- V1 表（保留兼容，标记为 deprecated）
+-- ============================================
+
+-- 工单表（V1，保留兼容）
 CREATE TABLE IF NOT EXISTS tickets (
     ticket_id TEXT PRIMARY KEY,
     metadata_json TEXT NOT NULL,      -- JSON: {"db_type": "...", "version": "...", "module": "...", "severity": "..."}
@@ -19,7 +113,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 诊断步骤表（核心表）
+-- 诊断步骤表（V1，DEPRECATED - 请使用 phenomena 表）
 CREATE TABLE IF NOT EXISTS diagnostic_steps (
     step_id TEXT PRIMARY KEY,              -- 格式: {ticket_id}_step_{index}
     ticket_id TEXT NOT NULL,
@@ -45,7 +139,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_steps (
 CREATE INDEX IF NOT EXISTS idx_diagnostic_steps_ticket_id ON diagnostic_steps(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_steps_step_index ON diagnostic_steps(step_index);
 
--- 全文检索虚拟表
+-- 全文检索虚拟表（V1，保留兼容）
 CREATE VIRTUAL TABLE IF NOT EXISTS steps_fts USING fts5(
     step_id UNINDEXED,
     observed_fact,
@@ -71,12 +165,18 @@ CREATE TRIGGER IF NOT EXISTS diagnostic_steps_au AFTER UPDATE ON diagnostic_step
     VALUES (new.rowid, new.step_id, new.observed_fact, new.observation_method, new.analysis_result);
 END;
 
+-- ============================================
+-- 共享表
+-- ============================================
+
 -- 根因模式表
 CREATE TABLE IF NOT EXISTS root_cause_patterns (
     pattern_id TEXT PRIMARY KEY,
     root_cause TEXT NOT NULL,              -- 根因描述
     key_symptoms TEXT NOT NULL,            -- 关键症状列表（JSON 数组）
-    related_step_ids TEXT NOT NULL,        -- 相关步骤 ID 列表（JSON 数组）
+    related_step_ids TEXT NOT NULL,        -- V1: 相关步骤 ID 列表（JSON 数组）
+    key_phenomenon_ids TEXT,               -- V2: 关键现象 ID 列表（JSON 数组）
+    related_ticket_ids TEXT,               -- V2: 相关工单 ID 列表（JSON 数组）
     ticket_count INTEGER NOT NULL,         -- 支持该根因的工单数量
     embedding BLOB                         -- 根因的向量表示
 );

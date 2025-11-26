@@ -13,6 +13,7 @@ from dbdiag.models.session import (
     ExecutedStep,
     DialogueMessage,
     SessionState,
+    ConfirmedPhenomenon,  # V2 新增
 )
 
 
@@ -109,6 +110,37 @@ class TestHypothesis:
         )
         assert hyp2.confidence == 1.0
 
+    def test_hypothesis_v2_fields(self):
+        """测试:V2 新增字段 (phenomenon 相关)"""
+        hyp = Hypothesis(
+            root_cause="索引膨胀导致 IO 瓶颈",
+            confidence=0.88,
+            supporting_step_ids=[],  # V1 字段保留兼容
+            missing_facts=[],
+            # V2 新增字段
+            supporting_phenomenon_ids=["P-0001", "P-0002"],
+            supporting_ticket_ids=["TICKET-001", "TICKET-005"],
+            next_recommended_phenomenon_id="P-0003",
+        )
+
+        assert hyp.supporting_phenomenon_ids == ["P-0001", "P-0002"]
+        assert hyp.supporting_ticket_ids == ["TICKET-001", "TICKET-005"]
+        assert hyp.next_recommended_phenomenon_id == "P-0003"
+
+    def test_hypothesis_v2_default_values(self):
+        """测试:V2 字段默认值"""
+        hyp = Hypothesis(
+            root_cause="测试",
+            confidence=0.5,
+            supporting_step_ids=[],
+            missing_facts=[],
+        )
+
+        # V2 字段应有默认值
+        assert hyp.supporting_phenomenon_ids == []
+        assert hyp.supporting_ticket_ids == []
+        assert hyp.next_recommended_phenomenon_id is None
+
 
 class TestExecutedStep:
     """ExecutedStep 模型测试"""
@@ -123,6 +155,36 @@ class TestExecutedStep:
         assert step.step_id == "step_001"
         assert step.result_summary == "查询执行计划显示全表扫描"
         assert step.executed_at is not None
+
+
+class TestConfirmedPhenomenon:
+    """ConfirmedPhenomenon 模型测试 (V2 新增)"""
+
+    def test_create_confirmed_phenomenon(self):
+        """测试:创建已确认现象"""
+        cp = ConfirmedPhenomenon(
+            phenomenon_id="P-0001",
+            result_summary="确认 wait_io 占比 65%",
+        )
+
+        assert cp.phenomenon_id == "P-0001"
+        assert cp.result_summary == "确认 wait_io 占比 65%"
+        assert cp.confirmed_at is not None
+
+    def test_confirmed_phenomenon_serialization(self):
+        """测试:已确认现象序列化"""
+        cp = ConfirmedPhenomenon(
+            phenomenon_id="P-0002",
+            result_summary="索引大小正常",
+        )
+
+        cp_dict = cp.model_dump()
+        assert cp_dict["phenomenon_id"] == "P-0002"
+        assert cp_dict["result_summary"] == "索引大小正常"
+
+        # 从字典创建
+        cp2 = ConfirmedPhenomenon(**cp_dict)
+        assert cp2.phenomenon_id == cp.phenomenon_id
 
 
 class TestDialogueMessage:
@@ -166,6 +228,9 @@ class TestSessionState:
         assert len(session.active_hypotheses) == 0
         assert len(session.executed_steps) == 0
         assert len(session.dialogue_history) == 0
+        # V2 新增字段
+        assert len(session.confirmed_phenomena) == 0
+        assert len(session.recommended_phenomenon_ids) == 0
 
     def test_create_full_session(self):
         """测试:创建完整会话"""
@@ -196,6 +261,39 @@ class TestSessionState:
         assert len(session.active_hypotheses) == 1
         assert len(session.executed_steps) == 1
         assert len(session.dialogue_history) == 2
+
+    def test_create_full_session_v2(self):
+        """测试:创建完整 V2 会话（包含 phenomenon 相关字段）"""
+        session = SessionState(
+            session_id="sess_v2_001",
+            user_problem="查询变慢",
+            confirmed_facts=[
+                ConfirmedFact(fact="wait_io 占比 65%", from_user_input=True)
+            ],
+            active_hypotheses=[
+                Hypothesis(
+                    root_cause="索引膨胀导致 IO 瓶颈",
+                    confidence=0.88,
+                    supporting_step_ids=[],
+                    missing_facts=[],
+                    supporting_phenomenon_ids=["P-0001", "P-0002"],
+                    supporting_ticket_ids=["TICKET-001"],
+                )
+            ],
+            confirmed_phenomena=[
+                ConfirmedPhenomenon(
+                    phenomenon_id="P-0001",
+                    result_summary="确认 wait_io 占比 65%",
+                )
+            ],
+            recommended_phenomenon_ids=["P-0001", "P-0002"],
+        )
+
+        assert session.session_id == "sess_v2_001"
+        assert len(session.confirmed_phenomena) == 1
+        assert session.confirmed_phenomena[0].phenomenon_id == "P-0001"
+        assert len(session.recommended_phenomenon_ids) == 2
+        assert session.active_hypotheses[0].supporting_phenomenon_ids == ["P-0001", "P-0002"]
 
     def test_session_to_dict(self):
         """测试:会话转字典"""

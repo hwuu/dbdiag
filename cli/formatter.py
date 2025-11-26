@@ -20,7 +20,7 @@ class TextFormatter:
     @staticmethod
     def format_step_recommendation(response: Dict[str, Any]) -> str:
         """
-        格式化步骤推荐
+        格式化步骤推荐 (V1, deprecated)
 
         Args:
             response: 系统响应字典
@@ -31,8 +31,7 @@ class TextFormatter:
         step = response.get("step", {})
         message = response.get("message", "")
 
-        output = ["\n[系统] 正在分析...\n"]
-        output.append("--- 推荐诊断步骤 ---\n")
+        output = ["\n--- 推荐诊断步骤 ---\n"]
 
         if isinstance(step, dict):
             # 观察目标
@@ -61,6 +60,41 @@ class TextFormatter:
             output.append("")
 
         output.append("请输入检查结果：")
+
+        return "\n".join(output)
+
+    @staticmethod
+    def format_phenomenon_recommendation(response: Dict[str, Any]) -> str:
+        """
+        格式化现象推荐 (V2，支持批量)
+
+        Args:
+            response: 系统响应字典
+
+        Returns:
+            格式化的文本
+        """
+        # 支持批量现象
+        phenomena = response.get("phenomena", [])
+        if not phenomena and response.get("phenomenon"):
+            phenomena = [response["phenomenon"]]
+
+        if not phenomena:
+            return response.get("message", "")
+
+        output = [f"\n--- 建议确认以下 {len(phenomena)} 个现象 ---\n"]
+
+        for i, phenomenon in enumerate(phenomena, 1):
+            output.append(f"[{i}] {phenomenon.phenomenon_id}")
+            output.append(f"    描述: {phenomenon.description}")
+            if phenomenon.observation_method:
+                output.append("    观察方法:")
+                method_lines = phenomenon.observation_method.strip().split("\n")
+                for line in method_lines:
+                    output.append(f"        {line}")
+            output.append("")
+
+        output.append("请输入检查结果（如：1确认 2否定 3确认）：")
 
         return "\n".join(output)
 

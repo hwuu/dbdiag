@@ -1,13 +1,15 @@
 """CLI 主程序
 
 提供命令行交互界面进行数据库问题诊断。
+
+V2 架构：使用 PhenomenonDialogueManager 进行现象级诊断。
 """
 import sys
 from pathlib import Path
 from typing import Optional
 
 from cli.formatter import TextFormatter
-from dbdiag.core.dialogue_manager import DialogueManager
+from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -28,9 +30,10 @@ class CLI:
         self.llm_service = LLMService(self.config)
         self.embedding_service = EmbeddingService(self.config)
 
-        # 初始化对话管理器
-        self.dialogue_manager = DialogueManager(
-            db_path, self.llm_service, self.embedding_service
+        # 初始化对话管理器 (V2)，传入进度回调
+        self.dialogue_manager = PhenomenonDialogueManager(
+            db_path, self.llm_service, self.embedding_service,
+            progress_callback=self._print_progress
         )
 
         # 格式化器
@@ -38,6 +41,13 @@ class CLI:
 
         # 当前会话 ID
         self.session_id: Optional[str] = None
+
+        # 对话轮次计数
+        self.round_count: int = 0
+
+    def _print_progress(self, message: str):
+        """打印进度信息（实时显示）"""
+        print(f"  → {message}", flush=True)
 
     def run(self):
         """运行 CLI 主循环"""
@@ -125,18 +135,27 @@ class CLI:
             user_message: 用户消息
         """
         try:
+            # 轮次分隔
+            print("\n" + "─" * 50)
+            self.round_count += 1
+
             if not self.session_id:
                 # 开始新会话
+                print(f"[第 {self.round_count} 轮] 正在分析问题...")
                 response = self.dialogue_manager.start_conversation(user_message)
                 self.session_id = response.get("session_id")
             else:
                 # 继续对话
+                print(f"[第 {self.round_count} 轮] 正在处理反馈...")
                 response = self.dialogue_manager.continue_conversation(
                     self.session_id, user_message
                 )
 
             # 格式化并输出响应
             self._format_and_print_response(response)
+
+            # 显示轮次 summary
+            self._print_round_summary()
 
         except Exception as e:
             print(self.formatter.format_error(f"处理失败: {str(e)}"))
@@ -152,6 +171,8 @@ class CLI:
 
         if action == "recommend_step":
             print(self.formatter.format_step_recommendation(response))
+        elif action == "recommend_phenomenon":
+            print(self.formatter.format_phenomenon_recommendation(response))
         elif action == "confirm_root_cause":
             print(self.formatter.format_root_cause_confirmation(response))
         else:
@@ -159,6 +180,27 @@ class CLI:
             message = response.get("message", "")
             if message:
                 print(f"\n{message}\n")
+
+    def _print_round_summary(self):
+        """打印轮次 summary"""
+        if not self.session_id:
+            return
+
+        session = self.dialogue_manager.session_service.get_session(self.session_id)
+        if not session:
+            return
+
+        print("\n" + "─" * 50)
+        print(f"[Summary] 第 {self.round_count} 轮完成")
+        print(f"  已确认事实: {len(session.confirmed_facts)}")
+        print(f"  已确认现象: {len(session.confirmed_phenomena)}")
+
+        if session.active_hypotheses:
+            print("  假设置信度:")
+            for i, hyp in enumerate(session.active_hypotheses[:3], 1):
+                conf_bar = "█" * int(hyp.confidence * 10) + "░" * (10 - int(hyp.confidence * 10))
+                print(f"    {i}. [{conf_bar}] {hyp.confidence:.0%} {hyp.root_cause[:30]}...")
+        print()
 
     def _show_history(self):
         """显示对话历史（最近5轮）"""
