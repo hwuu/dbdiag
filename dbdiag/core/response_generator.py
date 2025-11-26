@@ -3,11 +3,10 @@
 生成用户可读的响应，并附带工单引用
 """
 import sqlite3
-from typing import List, Dict, Any, Optional
-from pathlib import Path
+import json
+from typing import List, Dict, Any
 
-from dbdiag.models.step import DiagnosticStep
-from dbdiag.models.session import SessionState, Hypothesis
+from dbdiag.models.session import SessionState
 from dbdiag.services.llm_service import LLMService
 
 
@@ -25,6 +24,37 @@ class ResponseGenerator:
         self.db_path = db_path
         self.llm_service = llm_service
 
+    def _get_phenomenon_details(self, phenomenon_ids: List[str]) -> List[Dict[str, str]]:
+        """
+        获取现象详情
+
+        Args:
+            phenomenon_ids: 现象 ID 列表
+
+        Returns:
+            现象详情列表
+        """
+        if not phenomenon_ids:
+            return []
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        try:
+            placeholders = ",".join("?" * len(phenomenon_ids))
+            cursor.execute(
+                f"""
+                SELECT phenomenon_id, description, observation_method
+                FROM phenomena
+                WHERE phenomenon_id IN ({placeholders})
+                """,
+                phenomenon_ids,
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
     def generate_response(
         self, session: SessionState, recommendation: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -40,85 +70,12 @@ class ResponseGenerator:
         """
         action = recommendation["action"]
 
-        if action == "recommend_step":
-            return self._generate_step_response(session, recommendation["step"])
-        elif action == "confirm_root_cause":
+        if action == "confirm_root_cause":
             return self._generate_root_cause_response(session, recommendation)
         elif action == "ask_symptom":
             return self._generate_question_response(recommendation["message"])
         else:
             return self._generate_question_response(recommendation.get("message", "请提供更多信息"))
-
-    def _generate_step_response(
-        self, session: SessionState, step: DiagnosticStep
-    ) -> Dict[str, Any]:
-        """
-        生成步骤推荐响应
-
-        Args:
-            session: 会话状态
-            step: 推荐的步骤
-
-        Returns:
-            响应字典
-        """
-        # 查找相关工单（引用）
-        citations = self._get_citations_for_step(step)
-
-        # 构建引用标记
-        citation_markers = " ".join([f"[{i+1}]" for i in range(len(citations))])
-
-        # 使用 LLM 生成自然语言响应
-        llm_prompt = f"""
-基于以下诊断步骤，生成一段简洁的诊断建议（100字以内）：
-
-**观察目标：** {step.observed_fact}
-**诊断目的：** {step.analysis_result}
-
-要求：
-1. 语言简洁专业
-2. 解释为什么要执行这个步骤
-3. 不要重复观察目标的内容
-"""
-
-        explanation = self.llm_service.generate_simple(
-            llm_prompt,
-            system_prompt="你是一个数据库运维专家，擅长诊断数据库问题。回答要简明扼要。",
-        )
-
-        # 构建完整消息
-        message = f"""{explanation}
-
-**检查目标：** {step.observed_fact}
-
-**具体操作：**
-```sql
-{step.observation_method}
-```
-
-**诊断目的：** {step.analysis_result}
-
-**引用工单：** {citation_markers}
-"""
-
-        # 添加引用详情
-        if citations:
-            message += "\n\n---\n"
-            for i, citation in enumerate(citations, 1):
-                message += f"\n[{i}] **Ticket {citation['ticket_id']}**: {citation['description']}"
-                message += f"\n    根因: {citation['root_cause']}\n"
-
-        return {
-            "action": "recommend_step",
-            "message": message,
-            "step": {
-                "step_id": step.step_id,
-                "observed_fact": step.observed_fact,
-                "observation_method": step.observation_method,
-                "analysis_result": step.analysis_result,
-            },
-            "citations": citations,
-        }
 
     def _generate_root_cause_response(
         self, session: SessionState, recommendation: Dict[str, Any]
@@ -135,35 +92,37 @@ class ResponseGenerator:
         """
         root_cause = recommendation["root_cause"]
         confidence = recommendation["confidence"]
-        supporting_step_ids = recommendation["supporting_step_ids"]
 
         # 获取相关工单引用
         citations = self._get_citations_for_root_cause(root_cause)
 
-        # 构建诊断链路
-        diagnostic_chain = []
-        for i, fact in enumerate(session.confirmed_facts, 1):
-            diagnostic_chain.append(f"{i}. ✓ {fact.fact}")
-
-        chain_text = "\n".join(diagnostic_chain)
-
         # 获取解决方案
         solution = self._get_solution_for_root_cause(root_cause)
 
+        # 获取已确认现象详情
+        confirmed_ids = [cp.phenomenon_id for cp in session.confirmed_phenomena]
+        phenomenon_details = self._get_phenomenon_details(confirmed_ids)
+
+        # 调用 LLM 生成诊断总结
+        diagnosis_summary = self._generate_diagnosis_summary(
+            user_problem=session.user_problem,
+            confirmed_phenomena=session.confirmed_phenomena,
+            phenomenon_details=phenomenon_details,
+            root_cause=root_cause,
+            solution=solution,
+            citations=citations,
+        )
+
         message = f"""**根因已定位：{root_cause}** (置信度: {confidence:.0%})
 
-**诊断链路：**
-{chain_text}
-
-**建议解决方案：**
-{solution}
+{diagnosis_summary}
 
 **引用工单：** {' '.join([f"[{i+1}]" for i in range(len(citations))])}
 """
 
         # 添加引用详情
         if citations:
-            message += "\n\n---\n"
+            message += "\n---\n"
             for i, citation in enumerate(citations, 1):
                 message += f"\n[{i}] **Ticket {citation['ticket_id']}**: {citation['description']}"
                 message += f"\n    根因: {citation['root_cause']}"
@@ -178,7 +137,85 @@ class ResponseGenerator:
             "confidence": confidence,
             "solution": solution,
             "citations": citations,
+            "diagnosis_summary": diagnosis_summary,
         }
+
+    def _generate_diagnosis_summary(
+        self,
+        user_problem: str,
+        confirmed_phenomena: list,
+        phenomenon_details: List[Dict[str, str]],
+        root_cause: str,
+        solution: str,
+        citations: List[Dict[str, str]],
+    ) -> str:
+        """
+        调用 LLM 生成诊断总结
+
+        Args:
+            user_problem: 用户问题描述
+            confirmed_phenomena: 已确认现象列表
+            phenomenon_details: 现象详情
+            root_cause: 根因
+            solution: 解决方案
+            citations: 引用工单
+
+        Returns:
+            诊断总结文本
+        """
+        # 构建现象描述
+        phenomena_text = ""
+        detail_map = {d["phenomenon_id"]: d for d in phenomenon_details}
+        for cp in confirmed_phenomena:
+            detail = detail_map.get(cp.phenomenon_id, {})
+            phenomena_text += f"- {detail.get('description', cp.phenomenon_id)}\n"
+            phenomena_text += f"  用户反馈: {cp.result_summary}\n"
+
+        # 构建引用案例
+        citations_text = ""
+        for c in citations[:2]:  # 最多取 2 个案例
+            citations_text += f"- {c['description']}: {c['root_cause']}\n"
+
+        prompt = f"""你是数据库诊断专家。请根据以下诊断过程，生成一份简洁的诊断总结报告。
+
+## 用户问题
+{user_problem}
+
+## 已确认的现象
+{phenomena_text if phenomena_text else "（无明确确认的现象）"}
+
+## 定位的根因
+{root_cause}
+
+## 参考案例
+{citations_text if citations_text else "（无参考案例）"}
+
+## 建议解决方案
+{solution}
+
+请生成诊断总结，包含以下三个部分：
+1. **观察到的现象**：列出诊断过程中确认的关键现象
+2. **推理链路**：解释为什么这些现象指向该根因（因果关系）
+3. **恢复措施**：具体的解决步骤
+
+要求：
+- 简洁明了，每部分 2-3 句话
+- 使用 Markdown 格式
+- 不要重复"根因已定位"这样的开头"""
+
+        try:
+            summary = self.llm_service.generate_simple(prompt)
+            return summary.strip()
+        except Exception as e:
+            # 降级：返回简单模板
+            return f"""**观察到的现象：**
+{phenomena_text if phenomena_text else "用户描述: " + user_problem}
+
+**推理链路：**
+基于已确认现象和历史案例，判断根因为：{root_cause}
+
+**恢复措施：**
+{solution}"""
 
     def _generate_question_response(self, question: str) -> Dict[str, Any]:
         """
@@ -194,38 +231,6 @@ class ResponseGenerator:
             "action": "ask_question",
             "message": question,
         }
-
-    def _get_citations_for_step(self, step: DiagnosticStep) -> List[Dict[str, str]]:
-        """
-        获取步骤的引用工单
-
-        Args:
-            step: 诊断步骤
-
-        Returns:
-            引用列表
-        """
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT DISTINCT t.ticket_id, t.description, t.root_cause
-                FROM tickets t
-                JOIN diagnostic_steps ds ON t.ticket_id = ds.ticket_id
-                WHERE ds.step_id = ?
-                LIMIT 3
-                """,
-                (step.step_id,),
-            )
-
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-
-        finally:
-            conn.close()
 
     def _get_citations_for_root_cause(self, root_cause: str) -> List[Dict[str, str]]:
         """
@@ -245,7 +250,7 @@ class ResponseGenerator:
             cursor.execute(
                 """
                 SELECT ticket_id, description, root_cause, solution
-                FROM tickets
+                FROM raw_tickets
                 WHERE root_cause = ?
                 LIMIT 3
                 """,
@@ -275,7 +280,7 @@ class ResponseGenerator:
             cursor.execute(
                 """
                 SELECT solution
-                FROM tickets
+                FROM raw_tickets
                 WHERE root_cause = ?
                 LIMIT 1
                 """,

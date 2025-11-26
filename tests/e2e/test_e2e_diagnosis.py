@@ -9,7 +9,7 @@ import sys
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dbdiag.core.dialogue_manager import DialogueManager
+from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -25,7 +25,7 @@ def dialogue_manager():
     llm_service = LLMService(config)
     embedding_service = EmbeddingService(config)
 
-    return DialogueManager(db_path, llm_service, embedding_service)
+    return PhenomenonDialogueManager(db_path, llm_service, embedding_service)
 
 
 class TestE2EDiagnosis:
@@ -45,10 +45,10 @@ class TestE2EDiagnosis:
 
         # 验证生成了诊断建议
         assert len(response["message"]) > 0
-        # 验证消息包含实质内容（而不只是错误信息）
+        # 验证消息包含实质内容（V2 使用现象确认机制）
         assert any(
             keyword in response["message"]
-            for keyword in ["执行", "检查", "查询", "分析", "使用", "观察"]
+            for keyword in ["现象", "确认", "建议", "检查", "诊断"]
         )
 
     def test_multi_round_diagnosis_flow(self, dialogue_manager):
@@ -193,11 +193,11 @@ class TestE2EDiagnosis:
 
         message = response["message"]
 
-        # 验证包含推荐内容（可能是推荐步骤、确认根因或提问）
+        # 验证包含推荐内容（V2 使用现象确认机制）
         assert len(message) > 0
         assert any(
             keyword in message
-            for keyword in ["建议", "推荐", "检查", "执行", "确认", "请问"]
+            for keyword in ["建议", "推荐", "检查", "现象", "确认", "诊断"]
         )
 
 

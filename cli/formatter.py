@@ -66,7 +66,7 @@ class TextFormatter:
     @staticmethod
     def format_phenomenon_recommendation(response: Dict[str, Any]) -> str:
         """
-        格式化现象推荐 (V2，支持批量)
+        格式化现象推荐 (V2，支持批量，包含关联假设)
 
         Args:
             response: 系统响应字典
@@ -74,18 +74,43 @@ class TextFormatter:
         Returns:
             格式化的文本
         """
-        # 支持批量现象
-        phenomena = response.get("phenomena", [])
-        if not phenomena and response.get("phenomenon"):
-            phenomena = [response["phenomenon"]]
+        # 优先使用包含原因的新格式
+        phenomena_with_reasons = response.get("phenomena_with_reasons", [])
 
-        if not phenomena:
-            return response.get("message", "")
+        # 如果没有新格式，回退到旧格式
+        if not phenomena_with_reasons:
+            phenomena = response.get("phenomena", [])
+            if not phenomena and response.get("phenomenon"):
+                phenomena = [response["phenomenon"]]
 
-        output = [f"\n--- 建议确认以下 {len(phenomena)} 个现象 ---\n"]
+            if not phenomena:
+                return response.get("message", "")
 
-        for i, phenomenon in enumerate(phenomena, 1):
+            output = [f"\n--- 建议确认以下 {len(phenomena)} 个现象 ---\n"]
+
+            for i, phenomenon in enumerate(phenomena, 1):
+                output.append(f"[{i}] {phenomenon.phenomenon_id}")
+                output.append(f"    描述: {phenomenon.description}")
+                if phenomenon.observation_method:
+                    output.append("    观察方法:")
+                    method_lines = phenomenon.observation_method.strip().split("\n")
+                    for line in method_lines:
+                        output.append(f"        {line}")
+                output.append("")
+
+            output.append("请输入检查结果（如：1确认 2否定 3确认）：")
+            return "\n".join(output)
+
+        # 新格式：包含关联假设
+        output = [f"\n--- 建议确认以下 {len(phenomena_with_reasons)} 个现象 ---\n"]
+
+        for i, item in enumerate(phenomena_with_reasons, 1):
+            phenomenon = item["phenomenon"]
+            reason = item.get("reason", "")
+
             output.append(f"[{i}] {phenomenon.phenomenon_id}")
+            if reason:
+                output.append(f"    推荐原因: {reason}")
             output.append(f"    描述: {phenomenon.description}")
             if phenomenon.observation_method:
                 output.append("    观察方法:")
