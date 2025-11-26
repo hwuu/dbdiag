@@ -94,11 +94,11 @@ class HypothesisTracker:
         hypotheses.sort(key=lambda h: h.confidence, reverse=True)
 
         # 引入假设排他性：如果 Top-1 假设的置信度显著高于其他假设，降低其他假设的置信度
-        if len(hypotheses) > 1 and hypotheses[0].confidence > 0.65:
+        if len(hypotheses) > 1 and hypotheses[0].confidence > 0.45:
             confidence_gap = hypotheses[0].confidence - hypotheses[1].confidence
 
-            # 如果 Top-1 显著领先（差距 > 0.15），大幅降低其他假设
-            if confidence_gap > 0.15:
+            # 如果 Top-1 领先（差距 > 0.04），降低其他假设
+            if confidence_gap > 0.04:
                 penalty_factor = 0.7  # 降低到原来的 70%
                 for i in range(1, len(hypotheses)):
                     hypotheses[i] = Hypothesis(

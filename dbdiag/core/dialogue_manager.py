@@ -157,6 +157,25 @@ class DialogueManager:
         Returns:
             确认事实列表
         """
+        # 获取最近推荐的步骤上下文
+        last_recommended_step = None
+        if session.recommended_step_ids:
+            executed_step_ids = {s.step_id for s in session.executed_steps}
+            for step_id in reversed(session.recommended_step_ids):
+                if step_id not in executed_step_ids:
+                    # 获取步骤详情
+                    last_recommended_step = self._get_step_by_id(step_id)
+                    break
+
+        # 构建上下文信息
+        context_info = ""
+        if last_recommended_step:
+            context_info = f"""
+最近推荐的诊断步骤:
+- 观察目标: {last_recommended_step.observed_fact}
+- 检查方法: {last_recommended_step.observation_method}
+"""
+
         # 使用 LLM 智能提取事实
         system_prompt = """你是一个数据库诊断助手，负责从用户反馈中提取诊断事实。
 
@@ -165,8 +184,9 @@ class DialogueManager:
 规则:
 1. 提取明确的观察结果（如"CPU 使用率 95%"、"IO 正常"、"查询时间 30 秒"）
 2. 提取否定信息（如"IO 正常"表示"IO 没有瓶颈"）
-3. 忽略无关的闲聊或问题
-4. 每个事实用一句话概括
+3. 如果用户只是简单确认（如"确认"、"是的"、"观察到了"），结合推荐步骤的观察目标，将其转化为具体事实
+4. 忽略无关的闲聊或问题
+5. 每个事实用一句话概括
 
 输出格式: JSON 数组，每个元素是一个字符串
 例如: ["CPU 使用率 95%", "内存使用正常", "慢查询日志显示全表扫描"]
@@ -174,7 +194,7 @@ class DialogueManager:
 如果没有提取到事实，返回空数组: []"""
 
         user_prompt = f"""用户消息: {user_message}
-
+{context_info}
 请提取其中的诊断事实:"""
 
         try:
@@ -350,3 +370,51 @@ class DialogueManager:
             会话列表
         """
         return self.session_service.list_sessions(limit)
+
+    def _get_step_by_id(self, step_id: str):
+        """
+        根据步骤 ID 获取步骤详情
+
+        Args:
+            step_id: 步骤 ID
+
+        Returns:
+            DiagnosticStep 对象或 None
+        """
+        import sqlite3
+        from dbdiag.models.step import DiagnosticStep
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                """
+                SELECT
+                    step_id, ticket_id, step_index,
+                    observed_fact, observation_method, analysis_result,
+                    ticket_description, ticket_root_cause
+                FROM diagnostic_steps
+                WHERE step_id = ?
+                """,
+                (step_id,),
+            )
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            return DiagnosticStep(
+                step_id=row["step_id"],
+                ticket_id=row["ticket_id"],
+                step_index=row["step_index"],
+                observed_fact=row["observed_fact"],
+                observation_method=row["observation_method"],
+                analysis_result=row["analysis_result"],
+                ticket_description=row["ticket_description"],
+                ticket_root_cause=row["ticket_root_cause"],
+            )
+
+        finally:
+            conn.close()
