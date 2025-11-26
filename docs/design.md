@@ -25,16 +25,22 @@ metadata:
   module: "query_optimizer"
   severity: "high"
 description: "在线报表查询突然变慢，从5秒增加到30秒"
-diagnostic_steps:
-  - observed_fact: "wait_io 事件占比 65%，远超日常 20% 水平"
+anomalies:
+  - description: "wait_io 事件占比 65%，远超日常 20% 水平"
     observation_method: "SELECT event, count FROM pg_stat_activity WHERE wait_event IS NOT NULL"
-    analysis_result: "IO 等待高说明磁盘读写存在瓶颈，需进一步定位热点表或索引"
-  - observed_fact: "索引 test_idx 大小从 2GB 增长到 12GB"
+    why_relevant: "IO 等待高说明磁盘读写存在瓶颈，是查询变慢的直接原因"
+  - description: "索引 test_idx 大小从 2GB 增长到 12GB"
     observation_method: "SELECT indexname, pg_size_pretty(pg_relation_size(indexrelid)) FROM pg_indexes"
-    analysis_result: "索引膨胀导致扫描IO增加，确认为主要原因"
+    why_relevant: "索引膨胀导致 B-tree 层级增加，扫描时逻辑读放大"
 root_cause: "索引膨胀导致 IO 瓶颈"
 solution: "执行 REINDEX INDEX CONCURRENTLY test_idx; 并配置定期 VACUUM"
 ```
+
+**字段说明**：
+- `anomalies`：观察到的异常现象列表（无序集合，非线性流程）
+- `description`：异常现象描述，应包含量化指标
+- `observation_method`：观察该现象的具体操作（SQL/命令/工具）
+- `why_relevant`：该异常现象为什么与当前故障相关
 
 ---
 
@@ -42,16 +48,19 @@ solution: "执行 REINDEX INDEX CONCURRENTLY test_idx; 并配置定期 VACUUM"
 
 ### 2.1 关键洞察
 
-数据库问题诊断本质上是一个**决策树遍历过程**：
-- 每一步根据当前已知信息选择下一个最有价值的观察动作
+数据库问题诊断本质上是一个**模式匹配过程**：
+- DBA 看到异常现象后，联想到历史案例中类似的现象组合
 - 通过累积观察到的现象，逐步缩小根因可能性范围
 - 最终在置信度足够高时给出根因判断和解决方案
 
+**核心认知**：诊断是联想式、集合式的，而非严格线性流程。
+
 ### 2.2 设计原则
 
-1. **步骤级检索**（Step-Level Retrieval）
-   - 检索的最小单位是单个诊断步骤（diagnostic_step），而非整个工单
-   - 支持从不同工单中提取相关步骤进行组合
+1. **现象级检索**（Phenomenon-Level Retrieval）
+   - 检索的最小单位是标准化的现象（phenomenon），而非整个工单
+   - 支持从不同工单中提取相关现象进行组合
+   - 异常现象是无序集合，不强制顺序
 
 2. **上下文累积**（Context Accumulation）
    - 每轮对话累积更多已确认的现象
@@ -60,7 +69,7 @@ solution: "执行 REINDEX INDEX CONCURRENTLY test_idx; 并配置定期 VACUUM"
 3. **多路径并行**（Multi-Hypothesis Tracking）
    - 同时追踪 Top-N 个最可能的根因假设
    - 动态评估每个假设的置信度
-   - 推荐能最大程度区分不同假设的诊断步骤
+   - 推荐能最大程度区分不同假设的观察步骤
 
 4. **轻量级优先**（Lightweight First）
    - MVP 阶段使用简单有效的算法
@@ -119,10 +128,15 @@ solution: "执行 REINDEX INDEX CONCURRENTLY test_idx; 并配置定期 VACUUM"
 ┌────▼──────────────────────────────────┐
 │      存储层 (SQLite + 向量索引)        │
 │                                        │
+│  原始数据层：                          │
+│  • raw_tickets 表                      │
+│  • raw_anomalies 表                    │
+│                                        │
+│  处理后数据层：                        │
+│  • phenomena 表（标准现象库）          │
 │  • tickets 表                          │
-│  • diagnostic_steps 表 (展平)          │
-│  • root_cause_patterns 表              │
-│  • step_embeddings (向量索引)          │
+│  • ticket_anomalies 表                 │
+│  • phenomenon_embeddings (向量索引)   │
 │  • sessions 表/文件                    │
 └────────────────────────────────────────┘
 ```
@@ -163,14 +177,38 @@ embedding_model:
 
 ## 四、核心数据模型
 
-### 4.1 存储层数据表
+### 4.1 数据层设计理念
 
-#### 4.1.1 工单表 (tickets)
+系统采用**原始数据与处理后数据分离**的设计：
 
-存储原始工单数据：
+```
+原始工单数据（专家手工整理）
+    │
+    ▼ import
+    │
+原始数据表（raw_tickets, raw_anomalies）
+    │
+    ▼ rebuild-index（聚类 + LLM 标准化）
+    │
+处理后数据表（phenomena, tickets, ticket_anomalies）
+    │
+    ▼
+向量索引（用于检索）
+```
+
+**设计优势**：
+- 原始数据保留，可追溯，支持重新处理
+- 处理后数据标准化，便于检索和推荐
+- 标准现象库（phenomena）支持去重和复用
+
+### 4.2 原始数据表
+
+#### 4.2.1 原始工单表 (raw_tickets)
+
+存储专家标注的原始工单数据：
 
 ```sql
-CREATE TABLE tickets (
+CREATE TABLE raw_tickets (
     ticket_id TEXT PRIMARY KEY,
     metadata_json TEXT,           -- JSON: {"version": "...", "module": "...", "severity": "..."}
     description TEXT,             -- 问题描述
@@ -180,47 +218,82 @@ CREATE TABLE tickets (
 );
 ```
 
-#### 4.1.2 诊断步骤表 (diagnostic_steps)
+#### 4.2.2 原始异常表 (raw_anomalies)
 
-**核心表**，将每个工单的诊断步骤展平存储，作为检索的最小单元：
+存储专家标注的原始异常描述：
 
 ```sql
-CREATE TABLE diagnostic_steps (
-    step_id TEXT PRIMARY KEY,              -- 格式: {ticket_id}_step_{index}
+CREATE TABLE raw_anomalies (
+    id TEXT PRIMARY KEY,                   -- 格式: {ticket_id}_anomaly_{index}
     ticket_id TEXT,
-    step_index INTEGER,                    -- 步骤在工单中的顺序
-
-    -- 步骤内容
-    observed_fact TEXT,                    -- 观察到的现象
-    observation_method TEXT,               -- 具体操作（SQL、命令等）
-    analysis_result TEXT,                  -- 推理结果
-
-    -- 冗余字段（便于检索）
-    ticket_description TEXT,               -- 冗余工单描述
-    ticket_root_cause TEXT,                -- 冗余根因
-
-    -- 向量字段
-    fact_embedding BLOB,                   -- observed_fact 的向量表示
-    method_embedding BLOB,                 -- observation_method 的向量表示
-
-    FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id)
+    anomaly_index INTEGER,                 -- 异常在工单中的序号
+    description TEXT,                      -- 原始异常描述
+    observation_method TEXT,               -- 原始观察方法
+    why_relevant TEXT,                     -- 原始相关性解释
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ticket_id) REFERENCES raw_tickets(ticket_id)
 );
+```
 
--- 全文检索索引
-CREATE VIRTUAL TABLE steps_fts USING fts5(
-    observed_fact,
-    observation_method,
-    analysis_result,
-    content=diagnostic_steps
+### 4.3 处理后数据表
+
+#### 4.3.1 标准现象表 (phenomena)
+
+**核心表**，存储聚类去重后的标准化现象：
+
+```sql
+CREATE TABLE phenomena (
+    phenomenon_id TEXT PRIMARY KEY,        -- 格式: P-{序号}，如 P-0001
+    description TEXT,                      -- 标准化描述（LLM 生成）
+    observation_method TEXT,               -- 标准观察方法（选最佳）
+    source_anomaly_ids TEXT,               -- 来源的原始 anomaly IDs（JSON 数组）
+    cluster_size INTEGER,                  -- 聚类中的异常数量
+    embedding BLOB,                        -- 向量表示
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 **设计说明**：
-- 每个 `diagnostic_step` 是独立的检索单元，支持跨工单组合
-- `fact_embedding` 和 `method_embedding` 分别存储，因为用户可能只描述现象或只提供观察结果
-- 全文检索索引用于关键词匹配
+- 每个 phenomenon 是聚类后的标准现象，可能来自多个原始 anomaly
+- `description` 由 LLM 生成标准化描述
+- `observation_method` 从聚类中选择最完整/最佳的方法
+- `source_anomaly_ids` 记录来源，支持溯源
 
-#### 4.1.3 根因模式表 (root_cause_patterns)
+#### 4.3.2 处理后工单表 (tickets)
+
+```sql
+CREATE TABLE tickets (
+    ticket_id TEXT PRIMARY KEY,
+    raw_ticket_id TEXT,                    -- 关联原始工单
+    metadata_json TEXT,
+    description TEXT,
+    root_cause TEXT,
+    solution TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (raw_ticket_id) REFERENCES raw_tickets(ticket_id)
+);
+```
+
+#### 4.3.3 工单-现象关联表 (ticket_anomalies)
+
+```sql
+CREATE TABLE ticket_anomalies (
+    id TEXT PRIMARY KEY,                   -- 格式: {ticket_id}_anomaly_{index}
+    ticket_id TEXT,
+    phenomenon_id TEXT,                    -- 关联标准现象
+    why_relevant TEXT,                     -- 该工单上下文中的相关性解释
+    raw_anomaly_id TEXT,                   -- 关联原始异常（可选，用于溯源）
+    FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id),
+    FOREIGN KEY (phenomenon_id) REFERENCES phenomena(phenomenon_id),
+    FOREIGN KEY (raw_anomaly_id) REFERENCES raw_anomalies(id)
+);
+```
+
+**设计说明**：
+- 同一 phenomenon 在不同工单中可能有不同的 `why_relevant`
+- 例如：P-0001（wait_io 高）在索引膨胀工单和磁盘故障工单中相关性解释不同
+
+#### 4.3.4 根因模式表 (root_cause_patterns)
 
 预聚合的根因模式，用于快速匹配和假设生成：
 
@@ -228,14 +301,14 @@ CREATE VIRTUAL TABLE steps_fts USING fts5(
 CREATE TABLE root_cause_patterns (
     pattern_id TEXT PRIMARY KEY,
     root_cause TEXT,                       -- 根因描述
-    key_symptoms TEXT,                     -- 关键症状列表（JSON 数组）
-    related_step_ids TEXT,                 -- 相关步骤 ID 列表（JSON 数组）
+    key_phenomenon_ids TEXT,               -- 关键现象 ID 列表（JSON 数组）
+    related_ticket_ids TEXT,               -- 相关工单 ID 列表（JSON 数组）
     ticket_count INTEGER,                  -- 支持该根因的工单数量
     embedding BLOB                         -- 根因的向量表示
 );
 ```
 
-#### 4.1.4 会话表 (sessions)
+#### 4.3.5 会话表 (sessions)
 
 存储用户会话状态：
 
@@ -249,7 +322,7 @@ CREATE TABLE sessions (
 );
 ```
 
-### 4.2 会话状态结构
+### 4.4 会话状态结构
 
 会话状态以 JSON 格式存储在 `sessions.state_json` 字段中：
 
@@ -263,13 +336,13 @@ CREATE TABLE sessions (
     {
       "fact": "wait_io 事件占比 65%",
       "from_user_input": true,
-      "step_id": null,
+      "phenomenon_id": "P-0001",
       "timestamp": "2025-11-25T10:05:00Z"
     },
     {
       "fact": "索引 test_idx 从 2GB 增长到 12GB",
       "from_user_input": false,
-      "step_id": "TICKET-001_step_2",
+      "phenomenon_id": "P-0002",
       "observation_result": "pg_relation_size(test_idx) = 12GB",
       "timestamp": "2025-11-25T10:10:00Z"
     }
@@ -279,35 +352,30 @@ CREATE TABLE sessions (
     {
       "root_cause": "索引膨胀导致 IO 瓶颈",
       "confidence": 0.88,
-      "supporting_step_ids": [
-        "TICKET-001_step_1",
-        "TICKET-001_step_2",
-        "TICKET-005_step_3"
-      ],
-      "missing_facts": [],
-      "next_recommended_step_id": "TICKET-001_step_3"
+      "supporting_phenomenon_ids": ["P-0001", "P-0002"],
+      "supporting_ticket_ids": ["TICKET-001", "TICKET-005"],
+      "missing_phenomena": [],
+      "next_recommended_phenomenon_id": "P-0003"
     },
     {
       "root_cause": "统计信息过期导致执行计划错误",
       "confidence": 0.35,
-      "supporting_step_ids": ["TICKET-010_step_1"],
-      "missing_facts": ["统计信息更新时间"],
-      "next_recommended_step_id": "TICKET-010_step_2"
+      "supporting_phenomenon_ids": ["P-0001"],
+      "supporting_ticket_ids": ["TICKET-010"],
+      "missing_phenomena": ["统计信息更新时间"],
+      "next_recommended_phenomenon_id": "P-0010"
     }
   ],
 
-  "executed_steps": [
+  "confirmed_phenomena": [
     {
-      "step_id": "TICKET-001_step_1",
-      "executed_at": "2025-11-25T10:05:00Z",
+      "phenomenon_id": "P-0001",
+      "confirmed_at": "2025-11-25T10:05:00Z",
       "result_summary": "确认 wait_io 占比 65%"
     }
   ],
 
-  "recommended_step_ids": [
-    "TICKET-001_step_1",
-    "TICKET-001_step_2"
-  ],
+  "recommended_phenomenon_ids": ["P-0001", "P-0002"],
 
   "dialogue_history": [
     {
@@ -324,30 +392,224 @@ CREATE TABLE sessions (
 }
 ```
 
-**重要更新**（2025-11-25）：
-- 新增 `recommended_step_ids` 字段：记录所有已推荐过的步骤ID
-- 区分 `recommended_step_ids`（仅推荐）和 `executed_steps`（用户实际执行）
-- 推荐引擎只排除 `executed_steps`，允许重复推荐未执行的步骤（保守策略）
+**字段说明**：
+- `confirmed_facts`：用户确认的事实列表，关联到标准现象 ID
+- `active_hypotheses`：活跃的根因假设，关联现象 ID 和工单 ID
+- `confirmed_phenomena`：已确认的标准现象（用户执行了观察并反馈结果）
+- `recommended_phenomenon_ids`：已推荐过的现象 ID 列表
+
+### 4.5 数据处理流程（rebuild-index）
+
+rebuild-index 是将原始数据转换为可检索数据的核心流程：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    rebuild-index 流程                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. 读取原始数据                                            │
+│     raw_tickets + raw_anomalies                             │
+│                    │                                        │
+│                    ▼                                        │
+│  2. 生成向量                                                │
+│     对每个 raw_anomaly.description 调用 Embedding API       │
+│                    │                                        │
+│                    ▼                                        │
+│  3. 向量聚类                                                │
+│     相似度 > 阈值（如 0.85）的异常归为同一聚类              │
+│                    │                                        │
+│                    ▼                                        │
+│  4. 生成标准现象（LLM）                                     │
+│     每个聚类 → 一个 phenomenon                              │
+│     - LLM 生成标准化 description                            │
+│     - 选择最完整的 observation_method                       │
+│                    │                                        │
+│                    ▼                                        │
+│  5. 关联映射                                                │
+│     raw_anomaly → phenomenon_id                             │
+│     生成 ticket_anomalies 表                                │
+│                    │                                        │
+│                    ▼                                        │
+│  6. 构建向量索引                                            │
+│     phenomena.embedding → 向量索引                          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**核心算法**：
+
+```python
+def rebuild_index():
+    """重建索引的完整流程"""
+
+    # 1. 读取原始数据
+    raw_anomalies = db.query("SELECT * FROM raw_anomalies")
+
+    # 2. 生成向量
+    for anomaly in raw_anomalies:
+        anomaly.embedding = embedding_service.encode(anomaly.description)
+
+    # 3. 向量聚类
+    clusters = cluster_by_similarity(
+        items=raw_anomalies,
+        similarity_threshold=0.85
+    )
+
+    # 4. 为每个聚类生成标准现象
+    phenomena = []
+    for cluster_id, cluster_anomalies in clusters.items():
+        phenomenon = generate_standard_phenomenon(cluster_anomalies)
+        phenomena.append(phenomenon)
+
+    # 5. 保存 phenomena 并建立关联
+    for phenomenon in phenomena:
+        db.insert_phenomenon(phenomenon)
+
+        # 关联原始异常到现象
+        for raw_anomaly_id in phenomenon.source_anomaly_ids:
+            raw_anomaly = db.get_raw_anomaly(raw_anomaly_id)
+            db.insert_ticket_anomaly(
+                ticket_id=raw_anomaly.ticket_id,
+                phenomenon_id=phenomenon.phenomenon_id,
+                why_relevant=raw_anomaly.why_relevant,
+                raw_anomaly_id=raw_anomaly_id
+            )
+
+    # 6. 构建向量索引
+    build_vector_index(phenomena)
+
+
+def generate_standard_phenomenon(cluster_anomalies: list) -> Phenomenon:
+    """
+    使用 LLM 为聚类生成标准现象
+    """
+    # 收集聚类中所有描述
+    descriptions = [a.description for a in cluster_anomalies]
+    methods = [a.observation_method for a in cluster_anomalies]
+
+    # LLM 生成标准化描述
+    prompt = f"""
+以下是多个相似的数据库异常现象描述：
+{chr(10).join(f'- {d}' for d in descriptions)}
+
+请生成一个标准化的异常现象描述，要求：
+1. 保留关键指标名称
+2. 使用通用的阈值表述（如"超过阈值"而非具体数字）
+3. 简洁明确
+
+只输出标准化描述，不要其他内容。
+"""
+    standard_description = llm_service.generate(prompt)
+
+    # 选择最完整的观察方法
+    best_method = max(methods, key=lambda m: len(m) if m else 0)
+
+    # 计算聚类中心向量
+    embeddings = [a.embedding for a in cluster_anomalies]
+    center_embedding = np.mean(embeddings, axis=0)
+
+    return Phenomenon(
+        phenomenon_id=generate_phenomenon_id(),
+        description=standard_description,
+        observation_method=best_method,
+        source_anomaly_ids=[a.id for a in cluster_anomalies],
+        cluster_size=len(cluster_anomalies),
+        embedding=center_embedding
+    )
+
+
+def cluster_by_similarity(items: list, similarity_threshold: float) -> dict:
+    """
+    基于向量相似度的聚类算法
+
+    使用简单的贪心聚类：
+    1. 按顺序遍历所有项
+    2. 对每个项，检查是否与现有聚类中心相似
+    3. 如果相似，加入该聚类；否则创建新聚类
+    """
+    clusters = {}  # cluster_id -> list of items
+    cluster_centers = {}  # cluster_id -> center embedding
+
+    for item in items:
+        matched_cluster = None
+        max_similarity = 0
+
+        # 检查与现有聚类的相似度
+        for cluster_id, center in cluster_centers.items():
+            similarity = cosine_similarity(item.embedding, center)
+            if similarity > similarity_threshold and similarity > max_similarity:
+                matched_cluster = cluster_id
+                max_similarity = similarity
+
+        if matched_cluster:
+            # 加入现有聚类
+            clusters[matched_cluster].append(item)
+            # 更新聚类中心（增量平均）
+            n = len(clusters[matched_cluster])
+            cluster_centers[matched_cluster] = (
+                cluster_centers[matched_cluster] * (n - 1) + item.embedding
+            ) / n
+        else:
+            # 创建新聚类
+            new_cluster_id = len(clusters)
+            clusters[new_cluster_id] = [item]
+            cluster_centers[new_cluster_id] = item.embedding
+
+    return clusters
+```
+
+**粒度处理策略**（保守方案）：
+
+当用户输入粒度较粗时，系统采用追问细化策略：
+
+```python
+def process_user_input(user_input: str, session: Session):
+    """保守策略：粗粒度输入时用 LLM 追问"""
+
+    # 1. 尝试精确匹配
+    matches = vector_search(user_input, threshold=0.8)
+    if matches:
+        return handle_matches(matches, session)
+
+    # 2. 用 LLM 判断输入粒度并引导
+    return llm_guided_clarification(user_input, session)
+
+
+def llm_guided_clarification(user_input: str, session: Session):
+    """LLM 引导用户细化描述"""
+    prompt = f"""
+用户描述了一个数据库问题："{user_input}"
+
+这个描述比较模糊，请生成 2-3 个追问选项帮助用户细化：
+1. 每个选项应该是具体的现象或指标
+2. 附带一个简单的观察命令（SQL 或 shell）
+
+输出 JSON 格式：
+{{"options": ["选项1", "选项2", ...], "observation_sql": "..."}}
+"""
+    response = llm_service.generate(prompt)
+    return parse_clarification_response(response)
+```
 
 ---
 
 ## 五、核心算法
 
-### 5.1 步骤级检索算法
+### 5.1 现象级检索算法
 
-**目标**：基于当前会话状态，从知识库中检索最相关的诊断步骤。
+**目标**：基于当前会话状态，从知识库中检索最相关的标准现象。
 
 **输入**：
-- 当前会话状态（包含已确认事实、已执行步骤）
+- 当前会话状态（包含已确认事实、已确认现象）
 - 检索参数（top_k）
 
 **输出**：
-- 排序后的相关步骤列表
+- 排序后的相关现象列表
 
 **算法流程**：
 
 ```python
-def retrieve_relevant_steps(session, top_k=10):
+def retrieve_relevant_phenomena(session, top_k=10):
     # 1. 构建查询上下文
     query_context = build_query_context(session)
     # 示例: "查询变慢 + wait_io高 + n_tup_ins剧增"
@@ -360,32 +622,32 @@ def retrieve_relevant_steps(session, top_k=10):
     keywords = extract_keywords(session.confirmed_facts)
     # 示例: ["wait_io", "65%", "索引", "膨胀"]
 
-    filtered_steps = []
-    for step_id in vector_candidates:
-        step = db.get_step(step_id)
-        # 检查步骤是否包含关键词
-        if contains_keywords(step, keywords):
-            filtered_steps.append(step)
+    filtered_phenomena = []
+    for phenomenon_id in vector_candidates:
+        phenomenon = db.get_phenomenon(phenomenon_id)
+        # 检查现象是否包含关键词
+        if contains_keywords(phenomenon, keywords):
+            filtered_phenomena.append(phenomenon)
 
     # 4. 重排序（综合评分）
-    scored_steps = []
-    for step in filtered_steps:
-        # 4.1 事实覆盖度（已确认事实与步骤的匹配程度）
-        fact_coverage = compute_fact_coverage(step, session.confirmed_facts)
+    scored_phenomena = []
+    for phenomenon in filtered_phenomena:
+        # 4.1 事实覆盖度（已确认事实与现象的匹配程度）
+        fact_coverage = compute_fact_coverage(phenomenon, session.confirmed_facts)
 
         # 4.2 向量相似度
-        vector_score = cosine_similarity(query_embedding, step.fact_embedding)
+        vector_score = cosine_similarity(query_embedding, phenomenon.embedding)
 
-        # 4.3 步骤新颖度（避免重复推荐已执行步骤）
-        novelty = 1.0 if step.step_id not in session.executed_steps else 0.3
+        # 4.3 现象新颖度（避免重复推荐已确认现象）
+        novelty = 1.0 if phenomenon.phenomenon_id not in session.confirmed_phenomena else 0.3
 
         # 综合评分
         final_score = 0.5 * fact_coverage + 0.3 * vector_score + 0.2 * novelty
-        scored_steps.append((step, final_score))
+        scored_phenomena.append((phenomenon, final_score))
 
     # 5. 排序并返回 Top-K
-    scored_steps.sort(key=lambda x: x[1], reverse=True)
-    return [step for step, score in scored_steps[:top_k]]
+    scored_phenomena.sort(key=lambda x: x[1], reverse=True)
+    return [p for p, score in scored_phenomena[:top_k]]
 ```
 
 **关键点**：
@@ -407,34 +669,34 @@ def update_hypotheses(session, new_facts):
     # 2. 为每个根因构建假设
     hypotheses = []
     for rc_pattern in root_cause_candidates:
-        # 2.1 找到支持该根因的所有步骤
-        supporting_steps = get_steps_by_root_cause(rc_pattern.root_cause)
+        # 2.1 找到支持该根因的所有现象
+        supporting_phenomena = get_phenomena_by_root_cause(rc_pattern.root_cause)
 
         # 2.2 计算置信度
         confidence = compute_confidence(
             root_cause_pattern=rc_pattern,
-            supporting_steps=supporting_steps,
+            supporting_phenomena=supporting_phenomena,
             confirmed_facts=session.confirmed_facts,
-            executed_steps=session.executed_steps
+            confirmed_phenomena=session.confirmed_phenomena
         )
 
-        # 2.3 识别缺失的关键事实
-        missing_facts = identify_missing_facts(
+        # 2.3 识别缺失的关键现象
+        missing_phenomena = identify_missing_phenomena(
             root_cause_pattern=rc_pattern,
-            confirmed_facts=session.confirmed_facts
+            confirmed_phenomena=session.confirmed_phenomena
         )
 
-        # 2.4 推荐下一步
-        next_step = recommend_next_step_for_hypothesis(
-            rc_pattern, supporting_steps, session.executed_steps
+        # 2.4 推荐下一个观察现象
+        next_phenomenon = recommend_next_phenomenon_for_hypothesis(
+            rc_pattern, supporting_phenomena, session.confirmed_phenomena
         )
 
         hypotheses.append({
             "root_cause": rc_pattern.root_cause,
             "confidence": confidence,
-            "supporting_step_ids": [s.step_id for s in supporting_steps],
-            "missing_facts": missing_facts,
-            "next_recommended_step_id": next_step.step_id if next_step else None
+            "supporting_phenomenon_ids": [p.phenomenon_id for p in supporting_phenomena],
+            "missing_phenomena": missing_phenomena,
+            "next_recommended_phenomenon_id": next_phenomenon.phenomenon_id if next_phenomenon else None
         })
 
     # 3. 保留 Top-3 假设
@@ -447,21 +709,21 @@ def update_hypotheses(session, new_facts):
 **置信度计算公式**：
 
 ```python
-def compute_confidence(root_cause_pattern, supporting_steps,
-                      confirmed_facts, executed_steps):
+def compute_confidence(root_cause_pattern, supporting_phenomena,
+                      confirmed_facts, confirmed_phenomena):
     """
     多因素加权计算置信度
     """
     # 1. 事实匹配度（权重 50%）- 使用 LLM 智能评估
     fact_score = evaluate_facts_for_hypothesis(
         root_cause_pattern.root_cause,
-        supporting_steps,
+        supporting_phenomena,
         confirmed_facts
     )
 
-    # 2. 步骤执行进度（权重 30%）
-    executed_count = count_executed_steps(supporting_steps, executed_steps)
-    step_progress = executed_count / len(supporting_steps) if supporting_steps else 0
+    # 2. 现象确认进度（权重 30%）
+    confirmed_count = count_confirmed_phenomena(supporting_phenomena, confirmed_phenomena)
+    phenomenon_progress = confirmed_count / len(supporting_phenomena) if supporting_phenomena else 0
 
     # 3. 根因流行度（权重 10%）- 该根因在知识库中的频率
     frequency_score = min(root_cause_pattern.ticket_count / 10, 1.0)
@@ -473,7 +735,7 @@ def compute_confidence(root_cause_pattern, supporting_steps,
     # 综合计算
     confidence = (
         0.5 * fact_score +
-        0.3 * step_progress +
+        0.3 * phenomenon_progress +
         0.1 * frequency_score +
         0.1 * desc_similarity
     )
@@ -481,9 +743,9 @@ def compute_confidence(root_cause_pattern, supporting_steps,
     return confidence
 
 
-def evaluate_facts_for_hypothesis(root_cause, supporting_steps, confirmed_facts):
+def evaluate_facts_for_hypothesis(root_cause, supporting_phenomena, confirmed_facts):
     """
-    使用 LLM 智能评估已确认事实对假设的支持程度（2025-11-25 更新）
+    使用 LLM 智能评估已确认事实对假设的支持程度（2025-11-26 更新）
 
     Returns:
         float: 事实评分 0-1
@@ -499,7 +761,7 @@ def evaluate_facts_for_hypothesis(root_cause, supporting_steps, confirmed_facts)
     for fact in confirmed_facts:
         prompt = f'''
 根因假设: {root_cause}
-支持步骤: {[s.observed_fact for s in supporting_steps[:3]]}
+支持现象: {[p.description for p in supporting_phenomena[:3]]}
 已确认事实: {fact.fact}
 
 这个事实是否支持该假设？
@@ -524,88 +786,225 @@ def evaluate_facts_for_hypothesis(root_cause, supporting_steps, confirmed_facts)
         return sum(fact_scores) / len(fact_scores)
 ```
 
-**关键改进**（2025-11-25）：
+**关键改进**（2025-11-26）：
 - ✅ 使用 LLM 智能评估事实对假设的支持/反对程度
 - ✅ 负面事实（如"IO 正常"）能有效降低相关假设的置信度
 - ✅ 避免了简单关键词匹配的局限性
 
 ### 5.3 下一步推荐引擎
 
-**目标**：根据当前假设状态，决定下一步应该采取的行动。
+**目标**：根据当前假设状态，推荐下一波需要观察的现象（集合）。
+
+**核心流程**：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      对话循环                                │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  用户输入（现象描述）                                        │
+│         │                                                   │
+│         ▼                                                   │
+│  1. 匹配 phenomena                                          │
+│     - 向量检索 + 关键词匹配                                  │
+│     - 粗粒度输入 → 追问细化                                  │
+│         │                                                   │
+│         ▼                                                   │
+│  2. 更新 confirmed_facts                                    │
+│     - 记录用户确认的现象                                     │
+│         │                                                   │
+│         ▼                                                   │
+│  3. 计算工单置信度                                          │
+│     - 置信度 = 已匹配现象数 / 工单总现象数                   │
+│     - 考虑 why_relevant 的支持/反对                         │
+│         │                                                   │
+│         ▼                                                   │
+│  4. 判断是否达到阈值                                        │
+│         │                                                   │
+│    ┌────┴────┐                                             │
+│    │ > 0.85  │ ──→ 输出根因 + 解决方案 + 引用               │
+│    └────┬────┘                                             │
+│         │ < 0.85                                           │
+│         ▼                                                   │
+│  5. 推荐下一波现象（集合）                                   │
+│     - 从 Top-N 工单中选取未确认的关键现象                    │
+│     - 优先选能区分假设的现象                                 │
+│         │                                                   │
+│         ▼                                                   │
+│  返回步骤 1（等待用户反馈）                                  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
 **决策逻辑**：
 
 ```python
 def recommend_next_action(session):
     """
-    三阶段决策：确认根因 / 推荐步骤 / 询问信息
+    两阶段决策：确认根因 / 推荐一波观察现象
     """
     if not session.active_hypotheses:
         return ask_for_initial_info(session)
 
     top_hypothesis = session.active_hypotheses[0]
 
-    # 只排除已执行的步骤（用户做过的），不排除仅推荐过的步骤
-    excluded_step_ids = {s.step_id for s in session.executed_steps}
-
     # 阶段 1: 高置信度 -> 确认根因
     if top_hypothesis['confidence'] > 0.85:
         return generate_root_cause_confirmation(session, top_hypothesis)
 
-    # 阶段 2: 中置信度 -> 推荐验证步骤
-    if top_hypothesis['confidence'] > 0.50:
-        # 找到能区分 Top1 和 Top2 假设的步骤
-        next_step = find_discriminating_step(
-            session.active_hypotheses[0],
-            session.active_hypotheses[1] if len(session.active_hypotheses) > 1 else None,
-            excluded_step_ids  # 只排除已执行的
-        )
-
-        if next_step:
-            return generate_step_recommendation(session, next_step)
-
-    # 阶段 3: 低置信度 -> 多假设投票或主动询问
-    common_steps = find_common_recommended_steps(
-        session.active_hypotheses[:3],
-        excluded_step_ids
+    # 阶段 2: 推荐一波现象（集合）
+    recommended_phenomena = recommend_next_phenomena(
+        session,
+        top_k=3  # 每次推荐 3 个现象
     )
 
-    if common_steps:
-        # 多个假设都推荐的步骤（高价值）
-        return generate_step_recommendation(session, common_steps[0])
+    if recommended_phenomena:
+        return generate_batch_recommendation(session, recommended_phenomena)
 
     # 兜底：询问关键信息
     return ask_for_key_symptom(session, top_hypothesis)
+
+
+def recommend_next_phenomena(session, top_k=3):
+    """
+    推荐下一波需要观察的现象（集合）
+
+    策略：
+    1. 从 Top-N 候选工单中收集未确认的现象
+    2. 计算每个现象的"区分能力"（能区分多少假设）
+    3. 返回高价值现象集合
+    """
+    confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
+
+    # 1. 获取 Top-N 候选工单
+    candidate_tickets = get_top_tickets_by_confidence(session, n=5)
+
+    # 2. 收集所有未确认的现象，并记录来源工单
+    phenomenon_sources = {}  # phenomenon_id -> set of ticket_ids
+    for ticket in candidate_tickets:
+        for phenomenon_id in ticket.phenomenon_ids:
+            if phenomenon_id not in confirmed_ids:
+                if phenomenon_id not in phenomenon_sources:
+                    phenomenon_sources[phenomenon_id] = set()
+                phenomenon_sources[phenomenon_id].add(ticket.ticket_id)
+
+    # 3. 计算每个现象的价值分数
+    scored_phenomena = []
+    for phenomenon_id, ticket_ids in phenomenon_sources.items():
+        phenomenon = db.get_phenomenon(phenomenon_id)
+
+        # 区分能力：被多少候选工单共同需要
+        coverage_score = len(ticket_ids) / len(candidate_tickets)
+
+        # 唯一性：如果只被一个工单需要，能有效区分假设
+        uniqueness_score = 1.0 if len(ticket_ids) == 1 else 0.5
+
+        # 综合分数：平衡"共同需要"和"能区分假设"
+        final_score = 0.6 * coverage_score + 0.4 * uniqueness_score
+
+        scored_phenomena.append({
+            "phenomenon": phenomenon,
+            "ticket_ids": ticket_ids,
+            "score": final_score
+        })
+
+    # 4. 排序并返回 Top-K
+    scored_phenomena.sort(key=lambda x: x["score"], reverse=True)
+    return [item["phenomenon"] for item in scored_phenomena[:top_k]]
+
+
+def generate_batch_recommendation(session, phenomena):
+    """
+    生成批量现象推荐响应
+    """
+    # 收集相关工单
+    all_ticket_ids = set()
+    for p in phenomena:
+        ticket_ids = db.get_tickets_by_phenomenon(p.phenomenon_id)
+        all_ticket_ids.update(ticket_ids)
+
+    related_tickets = [db.get_ticket(tid) for tid in list(all_ticket_ids)[:5]]
+
+    return {
+        "action": "recommend_batch_observation",
+        "phenomena": [
+            {
+                "id": p.phenomenon_id,
+                "description": p.description,
+                "method": p.observation_method
+            }
+            for p in phenomena
+        ],
+        "citations": [
+            {
+                "index": i + 1,
+                "ticket_id": t.ticket_id,
+                "description": truncate(t.description, 100),
+                "root_cause": t.root_cause
+            }
+            for i, t in enumerate(related_tickets[:3])
+        ],
+        "message": format_batch_message(phenomena, related_tickets)
+    }
+
+
+def format_batch_message(phenomena, tickets):
+    """
+    格式化批量推荐消息
+    """
+    citation_markers = " ".join([f"[{i+1}]" for i in range(len(tickets))])
+
+    message = f"为了进一步定位问题，建议您同时检查以下现象：\n\n"
+
+    for i, p in enumerate(phenomena, 1):
+        message += f"**{i}. {p.description}** [P-{p.phenomenon_id}]\n"
+        message += f"```sql\n{p.observation_method}\n```\n\n"
+
+    message += f"**引用工单：** {citation_markers}\n\n---\n"
+
+    for i, ticket in enumerate(tickets, 1):
+        message += f"\n[{i}] **Ticket {ticket.ticket_id}**: {ticket.description}"
+        message += f"\n    根因: {ticket.root_cause}\n"
+
+    message += "\n请反馈您观察到的结果。"
+
+    return message
 ```
 
-**智能已执行步骤识别**（2025-11-25 新增）：
+**设计优势**：
+- ✅ 批量推荐：一次推荐多个现象，提高诊断效率
+- ✅ 简化状态追踪：只追踪"已确认"和"未确认"，无步骤顺序
+- ✅ 集合匹配：置信度 = 已匹配现象数 / 工单总现象数
+- ✅ 智能选择：平衡"多工单共同需要"和"能区分假设"
+
+**智能反馈识别**（2025-11-26 更新）：
 
 ```python
-def mark_executed_steps_from_feedback(user_message, session):
+def mark_confirmed_phenomena_from_feedback(user_message, session):
     """
-    从用户反馈中智能识别已执行的步骤
+    从用户反馈中智能识别已确认的现象
 
-    当用户反馈结果时（如"io 正常"），说明用户执行了最近推荐的步骤。
-    使用 LLM 自动识别执行反馈并标记步骤为已执行。
+    当用户反馈结果时（如"io 正常"），说明用户执行了最近推荐的观察。
+    使用 LLM 自动识别执行反馈并标记现象为已确认。
 
     Args:
         user_message: 用户消息
         session: 会话状态
     """
-    # 找到最近推荐的步骤（还未标记为执行的）
-    last_recommended_step_id = None
-    if session.recommended_step_ids:
-        executed_step_ids = {s.step_id for s in session.executed_steps}
-        for step_id in reversed(session.recommended_step_ids):
-            if step_id not in executed_step_ids:
-                last_recommended_step_id = step_id
+    # 找到最近推荐的现象（还未标记为确认的）
+    last_recommended_phenomenon_id = None
+    if session.recommended_phenomenon_ids:
+        confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
+        for phenomenon_id in reversed(session.recommended_phenomenon_ids):
+            if phenomenon_id not in confirmed_ids:
+                last_recommended_phenomenon_id = phenomenon_id
                 break
 
-    if not last_recommended_step_id:
-        return  # 没有待确认的推荐步骤
+    if not last_recommended_phenomenon_id:
+        return  # 没有待确认的推荐现象
 
-    # 使用 LLM 判断用户是否提供了执行反馈
-    system_prompt = """你是对话分析助手。判断用户的消息是否包含对诊断步骤的执行反馈。
+    # 使用 LLM 判断用户是否提供了观察反馈
+    system_prompt = """你是对话分析助手。判断用户的消息是否包含对诊断观察的反馈。
 
 执行反馈的特征：
 1. 报告了观察结果（如"CPU 使用率 95%"、"IO 正常"）
@@ -618,17 +1017,17 @@ def mark_executed_steps_from_feedback(user_message, session):
 
 输出格式: 只输出 "yes" 或 "no" """
 
-    user_prompt = f"用户消息: {user_message}\n\n这是否包含诊断步骤的执行反馈？"
+    user_prompt = f"用户消息: {user_message}\n\n这是否包含诊断观察的反馈？"
 
     try:
         response = llm_service.generate_simple(user_prompt, system_prompt)
         is_feedback = response.strip().lower() in ["yes", "是"]
 
         if is_feedback:
-            # 标记为已执行
-            session.executed_steps.append(
-                ExecutedStep(
-                    step_id=last_recommended_step_id,
+            # 标记为已确认
+            session.confirmed_phenomena.append(
+                ConfirmedPhenomenon(
+                    phenomenon_id=last_recommended_phenomenon_id,
                     result_summary=user_message,
                 )
             )
@@ -636,77 +1035,77 @@ def mark_executed_steps_from_feedback(user_message, session):
         # LLM 调用失败时使用简单规则作为回退
         feedback_keywords = ["正常", "异常", "%", "占比", "发现", "显示", "是", "确认"]
         if any(keyword in user_message.lower() for keyword in feedback_keywords):
-            session.executed_steps.append(
-                ExecutedStep(
-                    step_id=last_recommended_step_id,
+            session.confirmed_phenomena.append(
+                ConfirmedPhenomenon(
+                    phenomenon_id=last_recommended_phenomenon_id,
                     result_summary=user_message,
                 )
             )
 ```
 
-**关键改进**（2025-11-25）：
-- ✅ 推荐引擎只排除 `executed_steps`，允许重复推荐未执行的步骤（保守策略）
-- ✅ 使用 LLM 自动识别用户反馈中的执行信号
-- ✅ 区分"仅推荐"和"已执行"，避免误判
+**关键改进**（2025-11-26）：
+- ✅ 推荐引擎只排除 `confirmed_phenomena`，允许重复推荐未确认的现象（保守策略）
+- ✅ 使用 LLM 自动识别用户反馈中的观察信号
+- ✅ 区分"仅推荐"和"已确认"，避免误判
 
-**区分性步骤识别**：
+**区分性现象识别**：
 
 ```python
-def find_discriminating_step(hypothesis1, hypothesis2, executed_steps):
+def find_discriminating_phenomenon(hypothesis1, hypothesis2, confirmed_phenomena):
     """
-    找到能最大程度区分两个假设的步骤
+    找到能最大程度区分两个假设的现象
     """
     if not hypothesis2:
         # 只有一个假设，沿着该路径继续
-        return get_next_unexecuted_step(hypothesis1, executed_steps)
+        return get_next_unconfirmed_phenomenon(hypothesis1, confirmed_phenomena)
 
-    # 找到 hypothesis1 独有的步骤
-    unique_steps_h1 = set(hypothesis1['supporting_step_ids']) - \
-                      set(hypothesis2['supporting_step_ids'])
+    # 找到 hypothesis1 独有的现象
+    unique_phenomena_h1 = set(hypothesis1['supporting_phenomenon_ids']) - \
+                          set(hypothesis2['supporting_phenomenon_ids'])
 
-    # 选择还未执行的步骤
-    for step_id in unique_steps_h1:
-        if step_id not in [s['step_id'] for s in executed_steps]:
-            return db.get_step(step_id)
+    # 选择还未确认的现象
+    for phenomenon_id in unique_phenomena_h1:
+        if phenomenon_id not in [p.phenomenon_id for p in confirmed_phenomena]:
+            return db.get_phenomenon(phenomenon_id)
 
-    # 如果没有独有步骤，返回 hypothesis1 的下一步
-    return get_next_unexecuted_step(hypothesis1, executed_steps)
+    # 如果没有独有现象，返回 hypothesis1 的下一个现象
+    return get_next_unconfirmed_phenomenon(hypothesis1, confirmed_phenomena)
 ```
 
 **多假设投票机制**：
 
 ```python
-def find_common_recommended_steps(hypotheses, executed_steps):
+def find_common_recommended_phenomena(hypotheses, confirmed_phenomena):
     """
-    从多个假设中找到共同推荐的步骤（投票）
+    从多个假设中找到共同推荐的现象（投票）
     """
-    step_votes = {}
+    phenomenon_votes = {}
 
     for hyp in hypotheses:
-        next_step = get_next_unexecuted_step(hyp, executed_steps)
-        if not next_step:
+        next_phenomenon = get_next_unconfirmed_phenomenon(hyp, confirmed_phenomena)
+        if not next_phenomenon:
             continue
 
-        # 语义聚类：相似的步骤归为一组
-        step_key = get_semantic_cluster_key(next_step.observation_method)
+        # 语义聚类：相似的现象归为一组
+        phenomenon_key = get_semantic_cluster_key(next_phenomenon.observation_method)
 
-        if step_key not in step_votes:
-            step_votes[step_key] = {
-                'step': next_step,
+        if phenomenon_key not in phenomenon_votes:
+            phenomenon_votes[phenomenon_key] = {
+                'phenomenon': next_phenomenon,
                 'weighted_votes': 0,
                 'supporting_hypotheses': []
             }
 
         # 加权投票（按假设置信度加权）
-        step_votes[step_key]['weighted_votes'] += hyp['confidence']
-        step_votes[step_key]['supporting_hypotheses'].append(hyp['root_cause'])
+        phenomenon_votes[phenomenon_key]['weighted_votes'] += hyp['confidence']
+        phenomenon_votes[phenomenon_key]['supporting_hypotheses'].append(hyp['root_cause'])
 
     # 按投票数排序
-    ranked = sorted(step_votes.values(),
+    ranked = sorted(phenomenon_votes.values(),
                    key=lambda x: x['weighted_votes'],
                    reverse=True)
 
-    return [v['step'] for v in ranked]
+    return [v['phenomenon'] for v in ranked]
 ```
 
 ### 5.4 响应生成与引用构建
@@ -716,27 +1115,26 @@ def find_common_recommended_steps(hypotheses, executed_steps):
 **响应结构**：
 
 ```python
-def generate_step_recommendation(session, step):
+def generate_phenomenon_recommendation(session, phenomenon):
     """
-    生成步骤推荐响应（带引用）
+    生成现象观察推荐响应（带引用）
     """
-    # 1. 查找推荐该步骤的相关工单
+    # 1. 查找包含该现象的相关工单
     related_tickets = db.query("""
         SELECT DISTINCT t.ticket_id, t.description, t.root_cause
         FROM tickets t
-        JOIN diagnostic_steps ds ON t.ticket_id = ds.ticket_id
-        WHERE ds.step_id = ?
-           OR ds.observation_method LIKE ?
+        JOIN ticket_anomalies ta ON t.ticket_id = ta.ticket_id
+        WHERE ta.phenomenon_id = ?
         LIMIT 5
-    """, step.step_id, f"%{extract_key_operation(step.observation_method)}%")
+    """, phenomenon.phenomenon_id)
 
     # 2. 构建响应对象
     response = {
-        "action": "recommend_step",
-        "step": {
-            "description": step.observed_fact,
-            "method": step.observation_method,
-            "purpose": step.analysis_result
+        "action": "recommend_observation",
+        "phenomenon": {
+            "id": phenomenon.phenomenon_id,
+            "description": phenomenon.description,
+            "method": phenomenon.observation_method
         },
         "citations": [
             {
@@ -748,29 +1146,27 @@ def generate_step_recommendation(session, step):
             }
             for i, t in enumerate(related_tickets[:3])
         ],
-        "message": format_message_with_citations(step, related_tickets)
+        "message": format_message_with_citations(phenomenon, related_tickets)
     }
 
     return response
 
 
-def format_message_with_citations(step, tickets):
+def format_message_with_citations(phenomenon, tickets):
     """
     格式化带引用的消息
     """
     citation_markers = " ".join([f"[{i+1}]" for i in range(len(tickets))])
 
     message = f"""
-基于 {{len(tickets)}} 个相似案例，建议您执行以下操作：
+基于 {{len(tickets)}} 个相似案例，建议您观察以下现象：
 
-**检查目标：** {{step.observed_fact}}
+**检查目标：** {{phenomenon.description}}
 
 **具体操作：**
 \`\`\`sql
-{{step.observation_method}}
+{{phenomenon.observation_method}}
 \`\`\`
-
-**诊断目的：** {{step.analysis_result}}
 
 **引用工单：** {{citation_markers}}
 
@@ -843,16 +1239,18 @@ def format_message_with_citations(step, tickets):
 
 ## 七、对话流程示例
 
-### 7.1 完整对话流程
+### 7.1 V1 对话流程（步骤级，deprecated）
+
+> **注意**：V1 架构基于 `diagnostic_steps` 表进行步骤级检索，已标记为 deprecated。
 
 ````
 [第 1 轮]
 用户: "生产环境查询突然变慢，原来 5 秒现在要 30 秒"
 
-系统处理:
+系统处理（V1 - StepRetriever）:
   1. 创建新会话，初始化状态
   2. 对 "查询变慢" 进行向量检索
-  3. 召回 20 个相关步骤
+  3. 召回 20 个相关步骤（from diagnostic_steps）
   4. 提取初始假设:
      - 假设1: 索引膨胀 (confidence=0.35)
      - 假设2: 统计信息过期 (confidence=0.30)
@@ -891,13 +1289,14 @@ def format_message_with_citations(step, tickets):
 [第 2 轮]
 用户: "执行了，wait_io 占比 65%，平时只有 20%"
 
-系统处理:
+系统处理（V1 - HypothesisTracker）:
   1. 更新 confirmed_facts += ["wait_io 占比 65%"]
-  2. 重新计算置信度:
+  2. 标记 executed_steps += [step_id]
+  3. 重新计算置信度:
      - 假设1: 索引膨胀 (0.35 → 0.72) ↑
      - 假设2: 统计信息过期 (0.30 → 0.38)
      - 假设3: 锁等待 (0.25 → 0.10) ↓ (排除)
-  3. 找区分性步骤: "检查索引大小"
+  4. 找区分性步骤: "检查索引大小"
 
 系统响应:
   "wait_io 占比异常高说明存在磁盘 IO 瓶颈。请检查索引大小是否有异常增长：
@@ -932,10 +1331,11 @@ def format_message_with_citations(step, tickets):
 [第 3 轮]
 用户: "检查了，test_idx 从 2GB 涨到 12GB，增长太快了"
 
-系统处理:
+系统处理（V1 - RecommendationEngine）:
   1. 更新 confirmed_facts += ["索引 test_idx 从 2GB 增长到 12GB"]
-  2. 置信度: 假设1 = 0.88 (> 0.85 阈值)
-  3. 触发根因确认流程
+  2. 标记 executed_steps += [step_id]
+  3. 置信度: 假设1 = 0.88 (> 0.85 阈值)
+  4. 触发根因确认流程
 
 系统响应:
   "**根因已定位：索引膨胀导致 IO 瓶颈** (置信度: 88%)
@@ -975,7 +1375,9 @@ def format_message_with_citations(step, tickets):
   "
 ````
 
-### 7.2 未见问题处理示例
+### 7.2 V1 未见问题处理示例
+
+> **注意**：V1 架构基于步骤级检索，跨案例组合通过 `diagnostic_steps` 实现。
 
 ```
 场景：用户遇到的问题是 "wait_io 高 + 表膨胀"（而非索引膨胀）
@@ -985,18 +1387,174 @@ def format_message_with_citations(step, tickets):
   - Ticket B: n_dead_tup 剧增 → 表膨胀
   - 无完全匹配的案例
 
-系统处理（跨案例组合）：
+系统处理（V1 - 跨案例步骤组合）：
   1. 第 1 步推荐: "检查 wait_io" (来自 Ticket A 的 step_1)
   2. 用户反馈: "wait_io 65%"
-  3. 第 2 步推荐: "检查索引大小" (来自 Ticket A 的 step_2)
-  4. 用户反馈: "索引正常，但 n_dead_tup 很高"
-  5. 系统切换到 Ticket B 的路径
-  6. 第 3 步推荐: "检查表膨胀" (来自 Ticket B 的 step_2)
-  7. 最终定位: 表膨胀导致 IO 瓶颈
+  3. 标记 executed_steps += [step_1]
+  4. 第 2 步推荐: "检查索引大小" (来自 Ticket A 的 step_2)
+  5. 用户反馈: "索引正常，但 n_dead_tup 很高"
+  6. 系统切换到 Ticket B 的路径
+  7. 第 3 步推荐: "检查表膨胀" (来自 Ticket B 的 step_2)
+  8. 最终定位: 表膨胀导致 IO 瓶颈
 
 引用构建:
   [1] Ticket A (提供了 wait_io 诊断方法)
   [2] Ticket B (提供了表膨胀诊断方法)
+```
+
+### 7.3 V2 对话流程（现象级，推荐）
+
+> **V2 架构**：基于 `phenomena` 和 `ticket_anomalies` 表进行现象级检索，支持更好的去重和复用。
+
+````
+[第 1 轮]
+用户: "生产环境查询突然变慢，原来 5 秒现在要 30 秒"
+
+系统处理（V2 - PhenomenonRetriever）:
+  1. 创建新会话，初始化状态
+  2. 对 "查询变慢" 进行向量检索
+  3. 召回相关现象（from phenomena 表）
+  4. 通过 ticket_anomalies 关联到根因，生成初始假设:
+     - 假设1: 索引膨胀 (confidence=0.35)
+       - supporting_phenomenon_ids: ["P-0001", "P-0002"]
+       - supporting_ticket_ids: ["T-001", "T-005"]
+     - 假设2: 统计信息过期 (confidence=0.30)
+       - supporting_phenomenon_ids: ["P-0001", "P-0010"]
+       - supporting_ticket_ids: ["T-010"]
+  5. 推荐共同现象: P-0001 "wait_io 事件占比异常高"
+
+系统响应:
+  "您好！为了快速定位问题，建议先确认以下现象：
+
+  **现象描述：** wait_io 事件占比异常高
+
+  **观察方法：**
+  ```sql
+  SELECT wait_event_type, wait_event, COUNT(*)
+  FROM pg_stat_activity
+  WHERE wait_event IS NOT NULL
+  GROUP BY wait_event_type, wait_event
+  ORDER BY COUNT(*) DESC;
+  ```
+
+  **引用工单：** [1] [2] [3]
+
+  ---
+  [1] **Ticket T-001**: 报表查询慢，最终定位为索引膨胀
+  [2] **Ticket T-005**: 高峰期查询变慢
+  [3] **Ticket T-010**: 统计信息过期导致慢查询
+  "
+
+会话状态更新:
+  - recommended_phenomenon_ids: ["P-0001"]
+
+---
+
+[第 2 轮]
+用户: "执行了，wait_io 占比 65%，平时只有 20%"
+
+系统处理（V2 - PhenomenonHypothesisTracker）:
+  1. 更新 confirmed_facts += ["wait_io 占比 65%"]
+  2. 标记 confirmed_phenomena += [P-0001]（用户确认了该现象）
+  3. 使用 LLM 评估事实对假设的支持度
+  4. 重新计算置信度:
+     - 假设1: 索引膨胀 (0.35 → 0.72) ↑ 事实支持
+     - 假设2: 统计信息过期 (0.30 → 0.38)
+  5. 找区分性现象: P-0002 "索引大小异常增长"
+
+系统响应:
+  "wait_io 占比异常高说明存在磁盘 IO 瓶颈。请确认以下现象：
+
+  **现象描述：** 索引大小异常增长
+
+  **观察方法：**
+  ```sql
+  SELECT indexname, pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+  FROM pg_indexes
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY pg_relation_size(indexrelid) DESC
+  LIMIT 20;
+  ```
+
+  **引用工单：** [1] [4]
+  "
+
+会话状态更新:
+  - confirmed_phenomena: [P-0001]
+  - recommended_phenomenon_ids: ["P-0001", "P-0002"]
+
+---
+
+[第 3 轮]
+用户: "检查了，test_idx 从 2GB 涨到 12GB，增长太快了"
+
+系统处理（V2 - PhenomenonRecommendationEngine）:
+  1. 更新 confirmed_facts += ["索引 test_idx 从 2GB 增长到 12GB"]
+  2. 标记 confirmed_phenomena += [P-0002]
+  3. 置信度: 假设1 = 0.88 (> 0.85 阈值)
+  4. 触发根因确认流程
+
+系统响应:
+  "**根因已定位：索引膨胀导致 IO 瓶颈** (置信度: 88%)
+
+  **诊断链路（现象确认）：**
+  1. ✓ P-0001: wait_io 占比 65% → 确认磁盘 IO 瓶颈
+  2. ✓ P-0002: 索引 test_idx 异常增长 → 确认索引膨胀
+
+  **关联工单：** T-001, T-005
+
+  **建议解决方案：**
+  ```sql
+  REINDEX INDEX CONCURRENTLY test_idx;
+  ```
+  "
+
+会话状态更新:
+  - confirmed_phenomena: [P-0001, P-0002]
+  - active_hypotheses[0].confidence: 0.88
+````
+
+### 7.4 V2 未见问题处理示例
+
+> **V2 架构优势**：现象级检索天然支持跨案例组合，通过 `phenomena` 表的去重复用实现。
+
+```
+场景：用户遇到的问题是 "wait_io 高 + 表膨胀"（而非索引膨胀）
+
+知识库结构（V2）：
+  phenomena 表:
+    - P-0001: "wait_io 事件占比异常高"
+    - P-0002: "索引大小异常增长"
+    - P-0003: "n_dead_tup 剧增"
+    - P-0004: "表大小异常增长"
+
+  ticket_anomalies 关联:
+    - T-001 (索引膨胀): P-0001, P-0002
+    - T-002 (表膨胀): P-0001, P-0003, P-0004
+
+系统处理（V2 - 现象级跨案例组合）：
+  1. 推荐现象 P-0001: "wait_io 事件占比异常高"
+     （被 T-001 和 T-002 共同关联）
+  2. 用户反馈: "wait_io 65%"
+  3. 标记 confirmed_phenomena += [P-0001]
+  4. 推荐现象 P-0002: "索引大小异常增长"
+     （区分 T-001 vs T-002）
+  5. 用户反馈: "索引正常"
+  6. 事实评估: "索引正常" 反对假设"索引膨胀"，置信度下降
+  7. 自动切换到 T-002 路径
+  8. 推荐现象 P-0003: "n_dead_tup 剧增"
+  9. 用户反馈: "n_dead_tup 确实很高"
+  10. 标记 confirmed_phenomena += [P-0003]
+  11. 最终定位: 表膨胀导致 IO 瓶颈
+
+V2 优势体现:
+  - P-0001 被多个工单复用，无需重复定义
+  - 现象确认状态独立追踪（confirmed_phenomena）
+  - LLM 智能评估负面事实（"索引正常"降低索引膨胀假设置信度）
+
+引用构建:
+  [1] Ticket T-001 (提供了 P-0001 现象)
+  [2] Ticket T-002 (提供了 P-0003, P-0004 现象)
 ```
 
 ---
@@ -1025,7 +1583,7 @@ dbdiag/
 │   │   ├── __init__.py
 │   │   ├── session.py             # 会话数据模型
 │   │   ├── ticket.py              # 工单数据模型
-│   │   └── step.py                # 步骤数据模型
+│   │   └── phenomenon.py          # 现象数据模型
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── llm_service.py         # LLM API 调用
@@ -1319,3 +1877,187 @@ class EmbeddingService:
 - ✅ 持续学习和迭代
 
 通过本方案，可以在 **4 周内交付可演示的 MVP**，并为后续生产化和智能化升级奠定坚实基础。
+
+---
+
+## 十四、V2 代码架构（2025-11-26）
+
+### 14.1 架构升级概述
+
+V2 架构将系统从"步骤级检索"升级为"现象级检索"，核心变更：
+
+| V1 组件 | V2 组件 | 变更说明 |
+|---------|---------|----------|
+| `DiagnosticStep` | `Phenomenon` | 检索单位从步骤变为标准现象 |
+| `StepRetriever` | `PhenomenonRetriever` | 从 `diagnostic_steps` 表检索变为从 `phenomena` 表 |
+| `HypothesisTracker` | `PhenomenonHypothesisTracker` | 假设追踪基于现象而非步骤 |
+| `RecommendationEngine` | `PhenomenonRecommendationEngine` | 推荐现象而非步骤 |
+| `DialogueManager` | `PhenomenonDialogueManager` | 整合所有 V2 组件 |
+
+### 14.2 向后兼容性
+
+V1 组件保留但标记为 **deprecated**，使用时会触发警告：
+
+```python
+# V1 使用方式（deprecated，会触发 DeprecationWarning）
+from dbdiag.core.retriever import StepRetriever
+retriever = StepRetriever(db_path, embedding_service)
+
+# V2 使用方式（推荐）
+from dbdiag.core.retriever import PhenomenonRetriever
+retriever = PhenomenonRetriever(db_path, embedding_service)
+```
+
+### 14.3 V2 核心类
+
+#### 14.3.1 PhenomenonRetriever
+
+```python
+class PhenomenonRetriever:
+    """现象检索器 (V2)"""
+
+    def __init__(self, db_path: str, embedding_service: EmbeddingService = None):
+        ...
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 10,
+        vector_candidates: int = 50,
+        keywords: Optional[List[str]] = None,
+        excluded_phenomenon_ids: Optional[Set[str]] = None,
+    ) -> List[tuple[Phenomenon, float]]:
+        """
+        检索相关的标准现象
+
+        Returns:
+            (现象, 得分) 列表，按得分降序排列
+        """
+        ...
+```
+
+#### 14.3.2 PhenomenonHypothesisTracker
+
+```python
+class PhenomenonHypothesisTracker:
+    """基于现象的假设追踪器 (V2)"""
+
+    def __init__(
+        self,
+        db_path: str,
+        llm_service: LLMService,
+        embedding_service: EmbeddingService = None,
+    ):
+        ...
+
+    def update_hypotheses(
+        self,
+        session: SessionState,
+        new_facts: List[ConfirmedFact] = None,
+    ) -> SessionState:
+        """
+        更新会话的假设列表
+
+        假设包含 V2 字段：
+        - supporting_phenomenon_ids: 支持该假设的现象 ID 列表
+        - supporting_ticket_ids: 相关工单 ID 列表
+        - next_recommended_phenomenon_id: 推荐的下一个现象
+        """
+        ...
+```
+
+#### 14.3.3 PhenomenonRecommendationEngine
+
+```python
+class PhenomenonRecommendationEngine:
+    """基于现象的推荐引擎 (V2)"""
+
+    def __init__(self, db_path: str, llm_service: LLMService):
+        ...
+
+    def recommend_next_action(self, session: SessionState) -> Dict[str, any]:
+        """
+        推荐下一步行动
+
+        返回动作类型：
+        - ask_initial_info: 询问初始信息
+        - confirm_root_cause: 确认根因（高置信度）
+        - recommend_phenomenon: 推荐验证现象（中置信度）
+        - ask_symptom: 询问关键症状（低置信度）
+        """
+        ...
+```
+
+#### 14.3.4 PhenomenonDialogueManager
+
+```python
+class PhenomenonDialogueManager:
+    """基于现象的对话管理器 (V2)"""
+
+    def __init__(
+        self,
+        db_path: str,
+        llm_service: LLMService,
+        embedding_service: Optional["EmbeddingService"] = None,
+    ):
+        # 初始化 V2 组件
+        self.hypothesis_tracker = PhenomenonHypothesisTracker(...)
+        self.recommender = PhenomenonRecommendationEngine(...)
+        ...
+
+    def start_conversation(self, user_problem: str) -> Dict[str, Any]:
+        """开始新对话"""
+        ...
+
+    def continue_conversation(
+        self, session_id: str, user_message: str
+    ) -> Dict[str, Any]:
+        """继续对话，支持确认现象反馈"""
+        ...
+```
+
+### 14.4 会话状态 V2 字段
+
+`SessionState` 新增字段支持现象级追踪：
+
+```python
+class SessionState(BaseModel):
+    # ... V1 字段 ...
+
+    # V2 新增字段
+    confirmed_phenomena: List[ConfirmedPhenomenon] = []  # 已确认的现象
+    recommended_phenomenon_ids: List[str] = []           # 已推荐的现象 ID
+
+
+class Hypothesis(BaseModel):
+    # ... V1 字段 ...
+
+    # V2 新增字段
+    supporting_phenomenon_ids: List[str] = []            # 支持该假设的现象
+    supporting_ticket_ids: List[str] = []                # 相关工单
+    next_recommended_phenomenon_id: Optional[str] = None # 推荐的下一个现象
+```
+
+### 14.5 数据表使用
+
+V2 组件使用以下数据表：
+
+| 表名 | 用途 |
+|------|------|
+| `phenomena` | 标准现象库，V2 检索的主表 |
+| `ticket_anomalies` | 现象与工单的关联，用于获取 root_cause |
+| `raw_tickets` | 获取工单的 root_cause 和 solution |
+| `sessions` | 会话状态持久化（支持 V2 字段） |
+
+### 14.6 单元测试覆盖
+
+V2 架构新增单元测试文件：
+
+| 测试文件 | 覆盖内容 |
+|----------|----------|
+| `tests/unit/test_retriever.py` | PhenomenonRetriever + StepRetriever deprecation |
+| `tests/unit/test_hypothesis_tracker.py` | PhenomenonHypothesisTracker + deprecation |
+| `tests/unit/test_recommender.py` | PhenomenonRecommendationEngine + deprecation |
+| `tests/unit/test_dialogue_manager.py` | PhenomenonDialogueManager + deprecation |
+
+**测试统计**：107 个单元测试全部通过。

@@ -9,25 +9,25 @@
       "created_at": "2024-10-15T09:30:00Z"
     },
     "description": "在线报表查询突然变慢，原本5秒完成的查询现在需要30秒，影响业务报表生成",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "wait_io 事件占比 65%，远超日常 20% 水平",
-        "observation_method": "SELECT wait_event_type, wait_event, COUNT(*) as count FROM pg_stat_activity WHERE wait_event IS NOT NULL GROUP BY wait_event_type, wait_event ORDER BY count DESC;",
-        "analysis_result": "IO 等待高说明磁盘读写存在瓶颈，需进一步定位是表还是索引导致"
-      },
-      {
-        "observed_fact": "索引 report_table_idx 大小从 2GB 增长到 12GB",
-        "observation_method": "SELECT schemaname, tablename, indexname, pg_size_pretty(pg_relation_size(indexrelid)) as index_size FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY pg_relation_size(indexrelid) DESC LIMIT 20;",
-        "analysis_result": "索引膨胀导致扫描 IO 增加，确认为主要原因"
-      },
-      {
-        "observed_fact": "n_dead_tup 数量为 500000，autovacuum 未及时清理",
-        "observation_method": "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_autovacuum, last_autoanalyze FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY n_dead_tup DESC;",
-        "analysis_result": "死元组积累导致索引膨胀，需要执行 VACUUM 和 REINDEX"
-      }
-    ],
     "root_cause": "索引膨胀导致 IO 瓶颈",
-    "solution": "1. 执行 REINDEX INDEX CONCURRENTLY report_table_idx; 在线重建索引\n2. 调整 autovacuum 参数: ALTER TABLE report_table SET (autovacuum_vacuum_scale_factor = 0.05);\n3. 配置定期监控索引膨胀率"
+    "solution": "1. 执行 REINDEX INDEX CONCURRENTLY report_table_idx; 在线重建索引\n2. 调整 autovacuum 参数: ALTER TABLE report_table SET (autovacuum_vacuum_scale_factor = 0.05);\n3. 配置定期监控索引膨胀率",
+    "anomalies": [
+      {
+        "description": "wait_io 事件占比 65%，远超日常 20% 水平",
+        "observation_method": "SELECT wait_event_type, wait_event, COUNT(*) as count FROM pg_stat_activity WHERE wait_event IS NOT NULL GROUP BY wait_event_type, wait_event ORDER BY count DESC;",
+        "why_relevant": "IO 等待高说明磁盘读写存在瓶颈，需进一步定位是表还是索引导致"
+      },
+      {
+        "description": "索引 report_table_idx 大小从 2GB 增长到 12GB",
+        "observation_method": "SELECT schemaname, tablename, indexname, pg_size_pretty(pg_relation_size(indexrelid)) as index_size FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY pg_relation_size(indexrelid) DESC LIMIT 20;",
+        "why_relevant": "索引膨胀导致扫描 IO 增加，确认为主要原因"
+      },
+      {
+        "description": "n_dead_tup 数量为 500000，autovacuum 未及时清理",
+        "observation_method": "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_autovacuum, last_autoanalyze FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY n_dead_tup DESC;",
+        "why_relevant": "死元组积累导致索引膨胀，需要执行 VACUUM 和 REINDEX"
+      }
+    ]
   },
   {
     "ticket_id": "DB-002",
@@ -39,25 +39,25 @@
       "created_at": "2024-10-16T10:15:00Z"
     },
     "description": "数据库连接数耗尽，应用无法建立新连接，大量 FATAL: sorry, too many clients already 错误",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "当前连接数已达到 max_connections 上限 (200/200)",
-        "observation_method": "SELECT count(*) as current_connections, current_setting('max_connections')::int as max_connections FROM pg_stat_activity;",
-        "analysis_result": "连接池已满，需要定位连接泄漏或配置不当"
-      },
-      {
-        "observed_fact": "大量 idle in transaction 状态的连接，持续时间超过 1 小时",
-        "observation_method": "SELECT pid, usename, application_name, state, state_change, now() - state_change as duration FROM pg_stat_activity WHERE state = 'idle in transaction' ORDER BY state_change;",
-        "analysis_result": "应用层存在事务未提交问题，导致连接一直占用"
-      },
-      {
-        "observed_fact": "配置 idle_in_transaction_session_timeout 为 0（未启用超时）",
-        "observation_method": "SHOW idle_in_transaction_session_timeout;",
-        "analysis_result": "缺少超时保护机制，需要配置合理的超时时间"
-      }
-    ],
     "root_cause": "应用连接泄漏 + 缺少超时保护",
-    "solution": "1. 紧急释放 idle in transaction 连接: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND now() - state_change > interval '5 minutes';\n2. 配置超时: ALTER SYSTEM SET idle_in_transaction_session_timeout = '10min'; SELECT pg_reload_conf();\n3. 检查应用代码，确保事务正确提交或回滚\n4. 考虑使用连接池中间件（如 PgBouncer）"
+    "solution": "1. 紧急释放 idle in transaction 连接: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND now() - state_change > interval '5 minutes';\n2. 配置超时: ALTER SYSTEM SET idle_in_transaction_session_timeout = '10min'; SELECT pg_reload_conf();\n3. 检查应用代码，确保事务正确提交或回滚\n4. 考虑使用连接池中间件（如 PgBouncer）",
+    "anomalies": [
+      {
+        "description": "当前连接数已达到 max_connections 上限 (200/200)",
+        "observation_method": "SELECT count(*) as current_connections, current_setting('max_connections')::int as max_connections FROM pg_stat_activity;",
+        "why_relevant": "连接池已满，需要定位连接泄漏或配置不当"
+      },
+      {
+        "description": "大量 idle in transaction 状态的连接，持续时间超过 1 小时",
+        "observation_method": "SELECT pid, usename, application_name, state, state_change, now() - state_change as duration FROM pg_stat_activity WHERE state = 'idle in transaction' ORDER BY state_change;",
+        "why_relevant": "应用层存在事务未提交问题，导致连接一直占用"
+      },
+      {
+        "description": "配置 idle_in_transaction_session_timeout 为 0（未启用超时）",
+        "observation_method": "SHOW idle_in_transaction_session_timeout;",
+        "why_relevant": "缺少超时保护机制，需要配置合理的超时时间"
+      }
+    ]
   },
   {
     "ticket_id": "DB-003",
@@ -69,25 +69,25 @@
       "created_at": "2024-10-17T14:20:00Z"
     },
     "description": "流复制延迟严重，备库落后主库超过 2 小时，影响读写分离业务",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_replication 显示 replay_lag 超过 2 小时",
-        "observation_method": "SELECT application_name, state, sync_state, replay_lag, write_lag, flush_lag FROM pg_stat_replication;",
-        "analysis_result": "流复制延迟严重，需要定位是网络、回放速度还是配置问题"
-      },
-      {
-        "observed_fact": "备库 WAL 接收器进程正常，但 startup 进程 CPU 使用率 100%",
-        "observation_method": "SELECT pid, wait_event_type, wait_event, query FROM pg_stat_activity WHERE backend_type = 'startup';",
-        "analysis_result": "WAL 回放成为瓶颈，可能是大事务或配置问题"
-      },
-      {
-        "observed_fact": "主库有大量长时间运行的批量更新操作，生成了大量 WAL",
-        "observation_method": "SELECT pid, usename, application_name, state, query_start, query FROM pg_stat_activity WHERE state = 'active' AND (now() - query_start) > interval '5 minutes';",
-        "analysis_result": "大事务在备库回放时需要很长时间，导致复制延迟"
-      }
-    ],
     "root_cause": "大事务导致 WAL 回放延迟",
-    "solution": "1. 优化批量操作，拆分大事务为小事务\n2. 考虑增加 max_wal_senders 和调整 wal_sender_timeout\n3. 在备库调整 hot_standby_feedback = on 减少冲突\n4. 监控复制延迟，设置告警阈值: SELECT * FROM pg_stat_replication;"
+    "solution": "1. 优化批量操作，拆分大事务为小事务\n2. 考虑增加 max_wal_senders 和调整 wal_sender_timeout\n3. 在备库调整 hot_standby_feedback = on 减少冲突\n4. 监控复制延迟，设置告警阈值: SELECT * FROM pg_stat_replication;",
+    "anomalies": [
+      {
+        "description": "pg_stat_replication 显示 replay_lag 超过 2 小时",
+        "observation_method": "SELECT application_name, state, sync_state, replay_lag, write_lag, flush_lag FROM pg_stat_replication;",
+        "why_relevant": "流复制延迟严重，需要定位是网络、回放速度还是配置问题"
+      },
+      {
+        "description": "备库 WAL 接收器进程正常，但 startup 进程 CPU 使用率 100%",
+        "observation_method": "SELECT pid, wait_event_type, wait_event, query FROM pg_stat_activity WHERE backend_type = 'startup';",
+        "why_relevant": "WAL 回放成为瓶颈，可能是大事务或配置问题"
+      },
+      {
+        "description": "主库有大量长时间运行的批量更新操作，生成了大量 WAL",
+        "observation_method": "SELECT pid, usename, application_name, state, query_start, query FROM pg_stat_activity WHERE state = 'active' AND (now() - query_start) > interval '5 minutes';",
+        "why_relevant": "大事务在备库回放时需要很长时间，导致复制延迟"
+      }
+    ]
   },
   {
     "ticket_id": "DB-004",
@@ -99,25 +99,25 @@
       "created_at": "2024-10-18T11:30:00Z"
     },
     "description": "事务 ID 即将耗尽告警，数据库日志出现 WARNING: database must be vacuumed",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "age(datfrozenxid) 接近 20 亿，距离强制停机还有 1 亿事务",
-        "observation_method": "SELECT datname, age(datfrozenxid), current_setting('autovacuum_freeze_max_age')::int FROM pg_database ORDER BY age(datfrozenxid) DESC;",
-        "analysis_result": "事务 ID 回卷风险，需要立即执行 VACUUM FREEZE"
-      },
-      {
-        "observed_fact": "多个大表的 relfrozenxid 非常老旧",
-        "observation_method": "SELECT schemaname, relname, age(relfrozenxid), pg_size_pretty(pg_total_relation_size(schemaname||'.'||relname)) FROM pg_stat_user_tables ORDER BY age(relfrozenxid) DESC LIMIT 20;",
-        "analysis_result": "特定大表长期未执行 VACUUM FREEZE，成为瓶颈"
-      },
-      {
-        "observed_fact": "autovacuum 被手动设置为 off",
-        "observation_method": "SHOW autovacuum;",
-        "analysis_result": "自动清理被禁用，导致事务 ID 无法回收"
-      }
-    ],
     "root_cause": "autovacuum 被禁用导致事务 ID 回卷风险",
-    "solution": "1. 立即启用 autovacuum: ALTER SYSTEM SET autovacuum = on; SELECT pg_reload_conf();\n2. 对老旧表执行 VACUUM FREEZE: VACUUM FREEZE table_name;\n3. 降低 autovacuum_freeze_max_age 确保提前触发: ALTER SYSTEM SET autovacuum_freeze_max_age = 150000000;\n4. 监控所有库的 age(datfrozenxid)，设置告警"
+    "solution": "1. 立即启用 autovacuum: ALTER SYSTEM SET autovacuum = on; SELECT pg_reload_conf();\n2. 对老旧表执行 VACUUM FREEZE: VACUUM FREEZE table_name;\n3. 降低 autovacuum_freeze_max_age 确保提前触发: ALTER SYSTEM SET autovacuum_freeze_max_age = 150000000;\n4. 监控所有库的 age(datfrozenxid)，设置告警",
+    "anomalies": [
+      {
+        "description": "age(datfrozenxid) 接近 20 亿，距离强制停机还有 1 亿事务",
+        "observation_method": "SELECT datname, age(datfrozenxid), current_setting('autovacuum_freeze_max_age')::int FROM pg_database ORDER BY age(datfrozenxid) DESC;",
+        "why_relevant": "事务 ID 回卷风险，需要立即执行 VACUUM FREEZE"
+      },
+      {
+        "description": "多个大表的 relfrozenxid 非常老旧",
+        "observation_method": "SELECT schemaname, relname, age(relfrozenxid), pg_size_pretty(pg_total_relation_size(schemaname||'.'||relname)) FROM pg_stat_user_tables ORDER BY age(relfrozenxid) DESC LIMIT 20;",
+        "why_relevant": "特定大表长期未执行 VACUUM FREEZE，成为瓶颈"
+      },
+      {
+        "description": "autovacuum 被手动设置为 off",
+        "observation_method": "SHOW autovacuum;",
+        "why_relevant": "自动清理被禁用，导致事务 ID 无法回收"
+      }
+    ]
   },
   {
     "ticket_id": "DB-005",
@@ -129,25 +129,25 @@
       "created_at": "2024-10-20T14:20:00Z"
     },
     "description": "高峰期在线交易查询变慢，CPU 使用率正常但响应时间增加到 10 秒",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "EXPLAIN ANALYZE 显示执行计划使用了全表扫描而非索引",
-        "observation_method": "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM orders WHERE customer_id = 12345 AND order_date > '2024-01-01';",
-        "analysis_result": "优化器选择了错误的执行计划，可能是统计信息过期"
-      },
-      {
-        "observed_fact": "pg_stat_user_tables 显示 last_autoanalyze 时间为 30 天前",
-        "observation_method": "SELECT schemaname, relname, n_live_tup, n_mod_since_analyze, last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE relname = 'orders';",
-        "analysis_result": "统计信息严重过期，n_mod_since_analyze 高达 2000000 行"
-      },
-      {
-        "observed_fact": "手动执行 ANALYZE 后，执行计划恢复正常",
-        "observation_method": "ANALYZE orders; 然后重新执行 EXPLAIN ANALYZE",
-        "analysis_result": "确认统计信息过期是根因"
-      }
-    ],
     "root_cause": "统计信息过期导致执行计划错误",
-    "solution": "1. 立即执行 ANALYZE orders;\n2. 调整 autovacuum_analyze_scale_factor: ALTER TABLE orders SET (autovacuum_analyze_scale_factor = 0.05);\n3. 对于高频更新表，考虑定时任务强制 ANALYZE"
+    "solution": "1. 立即执行 ANALYZE orders;\n2. 调整 autovacuum_analyze_scale_factor: ALTER TABLE orders SET (autovacuum_analyze_scale_factor = 0.05);\n3. 对于高频更新表，考虑定时任务强制 ANALYZE",
+    "anomalies": [
+      {
+        "description": "EXPLAIN ANALYZE 显示执行计划使用了全表扫描而非索引",
+        "observation_method": "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM orders WHERE customer_id = 12345 AND order_date > '2024-01-01';",
+        "why_relevant": "优化器选择了错误的执行计划，可能是统计信息过期"
+      },
+      {
+        "description": "pg_stat_user_tables 显示 last_autoanalyze 时间为 30 天前",
+        "observation_method": "SELECT schemaname, relname, n_live_tup, n_mod_since_analyze, last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE relname = 'orders';",
+        "why_relevant": "统计信息严重过期，n_mod_since_analyze 高达 2000000 行"
+      },
+      {
+        "description": "手动执行 ANALYZE 后，执行计划恢复正常",
+        "observation_method": "ANALYZE orders; 然后重新执行 EXPLAIN ANALYZE",
+        "why_relevant": "确认统计信息过期是根因"
+      }
+    ]
   },
   {
     "ticket_id": "DB-006",
@@ -159,25 +159,25 @@
       "created_at": "2024-10-21T16:00:00Z"
     },
     "description": "数据库写入性能骤降，TPS 从 5000 降至 500，业务严重受影响",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_bgwriter 显示大量 checkpoint 写入，buffers_checkpoint 持续增长",
-        "observation_method": "SELECT * FROM pg_stat_bgwriter;",
-        "analysis_result": "频繁的 checkpoint 导致写入瓶颈"
-      },
-      {
-        "observed_fact": "磁盘 IO 使用率达到 100%，主要是 pg_wal 目录的写入",
-        "observation_method": "iostat -x 1 查看磁盘使用情况",
-        "analysis_result": "WAL 写入所在磁盘 IO 饱和"
-      },
-      {
-        "observed_fact": "max_wal_size 设置为 1GB，checkpoint_timeout 为 5 分钟",
-        "observation_method": "SHOW max_wal_size; SHOW checkpoint_timeout;",
-        "analysis_result": "WAL 配置过小，导致频繁触发 checkpoint"
-      }
-    ],
     "root_cause": "WAL 配置过小导致频繁 checkpoint",
-    "solution": "1. 增加 WAL 大小: ALTER SYSTEM SET max_wal_size = '8GB'; ALTER SYSTEM SET min_wal_size = '2GB'; SELECT pg_reload_conf();\n2. 调整 checkpoint 参数: ALTER SYSTEM SET checkpoint_timeout = '15min'; ALTER SYSTEM SET checkpoint_completion_target = 0.9;\n3. 考虑将 pg_wal 放到 SSD 或更快的磁盘\n4. 监控 checkpoint 频率和 IO 使用"
+    "solution": "1. 增加 WAL 大小: ALTER SYSTEM SET max_wal_size = '8GB'; ALTER SYSTEM SET min_wal_size = '2GB'; SELECT pg_reload_conf();\n2. 调整 checkpoint 参数: ALTER SYSTEM SET checkpoint_timeout = '15min'; ALTER SYSTEM SET checkpoint_completion_target = 0.9;\n3. 考虑将 pg_wal 放到 SSD 或更快的磁盘\n4. 监控 checkpoint 频率和 IO 使用",
+    "anomalies": [
+      {
+        "description": "pg_stat_bgwriter 显示大量 checkpoint 写入，buffers_checkpoint 持续增长",
+        "observation_method": "SELECT * FROM pg_stat_bgwriter;",
+        "why_relevant": "频繁的 checkpoint 导致写入瓶颈"
+      },
+      {
+        "description": "磁盘 IO 使用率达到 100%，主要是 pg_wal 目录的写入",
+        "observation_method": "iostat -x 1 查看磁盘使用情况",
+        "why_relevant": "WAL 写入所在磁盘 IO 饱和"
+      },
+      {
+        "description": "max_wal_size 设置为 1GB，checkpoint_timeout 为 5 分钟",
+        "observation_method": "SHOW max_wal_size; SHOW checkpoint_timeout;",
+        "why_relevant": "WAL 配置过小，导致频繁触发 checkpoint"
+      }
+    ]
   },
   {
     "ticket_id": "DB-007",
@@ -189,25 +189,25 @@
       "created_at": "2024-10-22T09:45:00Z"
     },
     "description": "pg_dump 备份执行时间从 2 小时增加到 8 小时，影响备份窗口",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "备份期间数据库 IO 使用率很低（仅 20%）",
-        "observation_method": "iostat -x 1 监控备份期间的磁盘 IO",
-        "analysis_result": "不是 IO 瓶颈，可能是 CPU 或数据传输问题"
-      },
-      {
-        "observed_fact": "pg_dump 进程 CPU 单核使用率 100%，处理大表时卡住",
-        "observation_method": "top 命令查看 pg_dump 进程 CPU 使用",
-        "analysis_result": "单线程备份无法利用多核，且某些表数据量过大"
-      },
-      {
-        "observed_fact": "使用 pg_dump --jobs=4 并行备份后，时间降至 2.5 小时",
-        "observation_method": "pg_dump --jobs=4 -Fd -f backup_dir dbname 测试并行备份",
-        "analysis_result": "并行备份可以利用多核资源，显著提升速度"
-      }
-    ],
     "root_cause": "单线程备份无法利用多核资源",
-    "solution": "1. 使用 pg_dump 并行备份: pg_dump --jobs=4 -Fd -f /backup/dir dbname\n2. 对于超大表，考虑分区备份\n3. 使用 pg_basebackup 进行物理备份（更快）\n4. 配置备份压缩减少传输时间: pg_dump --compress=9"
+    "solution": "1. 使用 pg_dump 并行备份: pg_dump --jobs=4 -Fd -f /backup/dir dbname\n2. 对于超大表，考虑分区备份\n3. 使用 pg_basebackup 进行物理备份（更快）\n4. 配置备份压缩减少传输时间: pg_dump --compress=9",
+    "anomalies": [
+      {
+        "description": "备份期间数据库 IO 使用率很低（仅 20%）",
+        "observation_method": "iostat -x 1 监控备份期间的磁盘 IO",
+        "why_relevant": "不是 IO 瓶颈，可能是 CPU 或数据传输问题"
+      },
+      {
+        "description": "pg_dump 进程 CPU 单核使用率 100%，处理大表时卡住",
+        "observation_method": "top 命令查看 pg_dump 进程 CPU 使用",
+        "why_relevant": "单线程备份无法利用多核，且某些表数据量过大"
+      },
+      {
+        "description": "使用 pg_dump --jobs=4 并行备份后，时间降至 2.5 小时",
+        "observation_method": "pg_dump --jobs=4 -Fd -f backup_dir dbname 测试并行备份",
+        "why_relevant": "并行备份可以利用多核资源，显著提升速度"
+      }
+    ]
   },
   {
     "ticket_id": "DB-008",
@@ -219,25 +219,25 @@
       "created_at": "2024-10-23T13:20:00Z"
     },
     "description": "查询性能不稳定，相同查询有时快有时慢，响应时间波动大",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_statements 显示同一查询的 mean_exec_time 波动很大",
-        "observation_method": "SELECT query, calls, mean_exec_time, stddev_exec_time, max_exec_time, min_exec_time FROM pg_stat_statements WHERE query LIKE '%target_table%' ORDER BY calls DESC;",
-        "analysis_result": "执行时间标准差很大，执行计划可能不稳定"
-      },
-      {
-        "observed_fact": "EXPLAIN 多次执行显示不同的执行计划",
-        "observation_method": "多次执行 EXPLAIN (ANALYZE, BUFFERS) SELECT ... 观察计划变化",
-        "analysis_result": "优化器在多个执行计划间切换，统计信息可能不准确"
-      },
-      {
-        "observed_fact": "执行 ANALYZE 后性能稳定在最优值",
-        "observation_method": "ANALYZE target_table; 然后观察查询性能",
-        "analysis_result": "统计信息不准确导致优化器选择不稳定"
-      }
-    ],
     "root_cause": "统计信息不准确导致执行计划不稳定",
-    "solution": "1. 定期执行 ANALYZE 更新统计信息\n2. 增加统计信息采样: ALTER TABLE target_table ALTER COLUMN col SET STATISTICS 1000;\n3. 对于关键查询，考虑使用 plan hints 或固定执行计划\n4. 启用 auto_explain 记录慢查询的执行计划变化"
+    "solution": "1. 定期执行 ANALYZE 更新统计信息\n2. 增加统计信息采样: ALTER TABLE target_table ALTER COLUMN col SET STATISTICS 1000;\n3. 对于关键查询，考虑使用 plan hints 或固定执行计划\n4. 启用 auto_explain 记录慢查询的执行计划变化",
+    "anomalies": [
+      {
+        "description": "pg_stat_statements 显示同一查询的 mean_exec_time 波动很大",
+        "observation_method": "SELECT query, calls, mean_exec_time, stddev_exec_time, max_exec_time, min_exec_time FROM pg_stat_statements WHERE query LIKE '%target_table%' ORDER BY calls DESC;",
+        "why_relevant": "执行时间标准差很大，执行计划可能不稳定"
+      },
+      {
+        "description": "EXPLAIN 多次执行显示不同的执行计划",
+        "observation_method": "多次执行 EXPLAIN (ANALYZE, BUFFERS) SELECT ... 观察计划变化",
+        "why_relevant": "优化器在多个执行计划间切换，统计信息可能不准确"
+      },
+      {
+        "description": "执行 ANALYZE 后性能稳定在最优值",
+        "observation_method": "ANALYZE target_table; 然后观察查询性能",
+        "why_relevant": "统计信息不准确导致优化器选择不稳定"
+      }
+    ]
   },
   {
     "ticket_id": "DB-009",
@@ -249,25 +249,25 @@
       "created_at": "2024-10-24T10:30:00Z"
     },
     "description": "数据库膨胀严重，磁盘空间占用持续增长，已达到 80% 使用率",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_user_tables 显示多个表的 n_dead_tup / n_live_tup 比例超过 30%",
-        "observation_method": "SELECT schemaname, relname, n_live_tup, n_dead_tup, round(100.0 * n_dead_tup / NULLIF(n_live_tup + n_dead_tup, 0), 2) as dead_ratio FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY dead_ratio DESC;",
-        "analysis_result": "死元组积累严重，autovacuum 清理不及时"
-      },
-      {
-        "observed_fact": "pg_stat_progress_vacuum 显示 autovacuum 正在运行但进度缓慢",
-        "observation_method": "SELECT * FROM pg_stat_progress_vacuum;",
-        "analysis_result": "autovacuum 运行中但效率低下"
-      },
-      {
-        "observed_fact": "autovacuum_vacuum_cost_delay 设置为 20ms，过于保守",
-        "observation_method": "SHOW autovacuum_vacuum_cost_delay; SHOW autovacuum_vacuum_cost_limit;",
-        "analysis_result": "为了避免影响业务，autovacuum 被限速，导致清理速度跟不上写入速度"
-      }
-    ],
     "root_cause": "autovacuum 限速过于保守导致清理不及时",
-    "solution": "1. 调整 autovacuum 限速: ALTER SYSTEM SET autovacuum_vacuum_cost_delay = 2; ALTER SYSTEM SET autovacuum_vacuum_cost_limit = 2000; SELECT pg_reload_conf();\n2. 增加 autovacuum worker 数量: ALTER SYSTEM SET autovacuum_max_workers = 6;\n3. 对膨胀严重的表执行手动 VACUUM: VACUUM (VERBOSE, ANALYZE) table_name;\n4. 考虑使用 pg_repack 在线重组表（不锁表）"
+    "solution": "1. 调整 autovacuum 限速: ALTER SYSTEM SET autovacuum_vacuum_cost_delay = 2; ALTER SYSTEM SET autovacuum_vacuum_cost_limit = 2000; SELECT pg_reload_conf();\n2. 增加 autovacuum worker 数量: ALTER SYSTEM SET autovacuum_max_workers = 6;\n3. 对膨胀严重的表执行手动 VACUUM: VACUUM (VERBOSE, ANALYZE) table_name;\n4. 考虑使用 pg_repack 在线重组表（不锁表）",
+    "anomalies": [
+      {
+        "description": "pg_stat_user_tables 显示多个表的 n_dead_tup / n_live_tup 比例超过 30%",
+        "observation_method": "SELECT schemaname, relname, n_live_tup, n_dead_tup, round(100.0 * n_dead_tup / NULLIF(n_live_tup + n_dead_tup, 0), 2) as dead_ratio FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY dead_ratio DESC;",
+        "why_relevant": "死元组积累严重，autovacuum 清理不及时"
+      },
+      {
+        "description": "pg_stat_progress_vacuum 显示 autovacuum 正在运行但进度缓慢",
+        "observation_method": "SELECT * FROM pg_stat_progress_vacuum;",
+        "why_relevant": "autovacuum 运行中但效率低下"
+      },
+      {
+        "description": "autovacuum_vacuum_cost_delay 设置为 20ms，过于保守",
+        "observation_method": "SHOW autovacuum_vacuum_cost_delay; SHOW autovacuum_vacuum_cost_limit;",
+        "why_relevant": "为了避免影响业务，autovacuum 被限速，导致清理速度跟不上写入速度"
+      }
+    ]
   },
   {
     "ticket_id": "DB-010",
@@ -279,25 +279,25 @@
       "created_at": "2024-10-25T15:10:00Z"
     },
     "description": "WAL 归档失败，pg_wal 目录磁盘空间耗尽，数据库停止写入",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "磁盘空间 100% 使用，pg_wal 目录占用 500GB",
-        "observation_method": "df -h 和 du -sh /var/lib/postgresql/14/main/pg_wal/*",
-        "analysis_result": "WAL 文件未及时归档和清理，持续积累"
-      },
-      {
-        "observed_fact": "pg_stat_archiver 显示 last_failed_time 不为空，归档命令失败",
-        "observation_method": "SELECT * FROM pg_stat_archiver;",
-        "analysis_result": "WAL 归档脚本执行失败，导致 WAL 无法清理"
-      },
-      {
-        "observed_fact": "归档目标目录不存在或权限不足",
-        "observation_method": "检查 archive_command 配置的目标路径",
-        "analysis_result": "归档配置错误导致归档失败"
-      }
-    ],
     "root_cause": "WAL 归档配置错误导致磁盘耗尽",
-    "solution": "1. 修复归档配置: 确保 archive_command 中的目标路径存在且有写权限\n2. 临时禁用归档释放空间: ALTER SYSTEM SET archive_mode = off; SELECT pg_reload_conf(); 重启数据库\n3. 手动清理已成功备份的 WAL: pg_archivecleanup /archive_path 000000010000000000000010\n4. 重新启用归档并监控: ALTER SYSTEM SET archive_mode = on; 配置告警"
+    "solution": "1. 修复归档配置: 确保 archive_command 中的目标路径存在且有写权限\n2. 临时禁用归档释放空间: ALTER SYSTEM SET archive_mode = off; SELECT pg_reload_conf(); 重启数据库\n3. 手动清理已成功备份的 WAL: pg_archivecleanup /archive_path 000000010000000000000010\n4. 重新启用归档并监控: ALTER SYSTEM SET archive_mode = on; 配置告警",
+    "anomalies": [
+      {
+        "description": "磁盘空间 100% 使用，pg_wal 目录占用 500GB",
+        "observation_method": "df -h 和 du -sh /var/lib/postgresql/14/main/pg_wal/*",
+        "why_relevant": "WAL 文件未及时归档和清理，持续积累"
+      },
+      {
+        "description": "pg_stat_archiver 显示 last_failed_time 不为空，归档命令失败",
+        "observation_method": "SELECT * FROM pg_stat_archiver;",
+        "why_relevant": "WAL 归档脚本执行失败，导致 WAL 无法清理"
+      },
+      {
+        "description": "归档目标目录不存在或权限不足",
+        "observation_method": "检查 archive_command 配置的目标路径",
+        "why_relevant": "归档配置错误导致归档失败"
+      }
+    ]
   },
   {
     "ticket_id": "DB-011",
@@ -309,25 +309,25 @@
       "created_at": "2024-10-26T11:00:00Z"
     },
     "description": "分区表查询性能不理想，全表扫描导致查询缓慢",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "EXPLAIN 显示查询扫描了所有分区，未进行分区裁剪",
-        "observation_method": "EXPLAIN SELECT * FROM orders WHERE order_date = '2024-10-26';",
-        "analysis_result": "分区裁剪未生效，查询条件可能不匹配分区键"
-      },
-      {
-        "observed_fact": "constraint_exclusion 参数设置为 off",
-        "observation_method": "SHOW constraint_exclusion;",
-        "analysis_result": "分区裁剪功能被禁用"
-      },
-      {
-        "observed_fact": "启用 constraint_exclusion 后，查询仅扫描目标分区",
-        "observation_method": "SET constraint_exclusion = partition; 然后执行 EXPLAIN",
-        "analysis_result": "确认配置问题导致分区裁剪失效"
-      }
-    ],
     "root_cause": "constraint_exclusion 未启用导致分区裁剪失效",
-    "solution": "1. 启用分区裁剪: ALTER SYSTEM SET constraint_exclusion = partition; SELECT pg_reload_conf();\n2. 确保查询条件使用分区键\n3. 为分区表的常用查询列创建索引\n4. 考虑使用声明式分区（PostgreSQL 10+）替代继承分区"
+    "solution": "1. 启用分区裁剪: ALTER SYSTEM SET constraint_exclusion = partition; SELECT pg_reload_conf();\n2. 确保查询条件使用分区键\n3. 为分区表的常用查询列创建索引\n4. 考虑使用声明式分区（PostgreSQL 10+）替代继承分区",
+    "anomalies": [
+      {
+        "description": "EXPLAIN 显示查询扫描了所有分区，未进行分区裁剪",
+        "observation_method": "EXPLAIN SELECT * FROM orders WHERE order_date = '2024-10-26';",
+        "why_relevant": "分区裁剪未生效，查询条件可能不匹配分区键"
+      },
+      {
+        "description": "constraint_exclusion 参数设置为 off",
+        "observation_method": "SHOW constraint_exclusion;",
+        "why_relevant": "分区裁剪功能被禁用"
+      },
+      {
+        "description": "启用 constraint_exclusion 后，查询仅扫描目标分区",
+        "observation_method": "SET constraint_exclusion = partition; 然后执行 EXPLAIN",
+        "why_relevant": "确认配置问题导致分区裁剪失效"
+      }
+    ]
   },
   {
     "ticket_id": "DB-012",
@@ -339,25 +339,25 @@
       "created_at": "2024-11-01T16:45:00Z"
     },
     "description": "在线交易系统出现大量查询超时，用户投诉无法下单",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "wait_event 显示大量 Lock:relation 和 Lock:tuple 等待",
-        "observation_method": "SELECT pid, wait_event_type, wait_event, state, query FROM pg_stat_activity WHERE wait_event IS NOT NULL;",
-        "analysis_result": "存在锁等待，需要定位持锁的会话"
-      },
-      {
-        "observed_fact": "发现一个运行超过 2 小时的长事务持有排他锁",
-        "observation_method": "SELECT pid, usename, application_name, state, query_start, state_change, query FROM pg_stat_activity WHERE state != 'idle' AND (now() - query_start) > interval '10 minutes' ORDER BY query_start;",
-        "analysis_result": "长事务阻塞了后续的写操作，导致锁等待队列积压"
-      },
-      {
-        "observed_fact": "pg_locks 显示该事务持有 orders 表的 AccessExclusiveLock",
-        "observation_method": "SELECT l.locktype, l.database, l.relation::regclass, l.page, l.tuple, l.virtualxid, l.transactionid, l.mode, l.granted, a.query FROM pg_locks l LEFT JOIN pg_stat_activity a ON l.pid = a.pid WHERE NOT l.granted OR l.mode = 'AccessExclusiveLock';",
-        "analysis_result": "确认是 DDL 操作（ALTER TABLE）导致的表级锁"
-      }
-    ],
     "root_cause": "长事务持锁导致锁等待",
-    "solution": "1. 紧急处理：终止问题会话 SELECT pg_terminate_backend(pid);\n2. 检查应用代码，避免在事务中执行耗时操作\n3. 配置 statement_timeout 和 lock_timeout 防止长时间锁等待\n4. DDL 操作应在低峰期执行，使用 CONCURRENTLY 选项"
+    "solution": "1. 紧急处理：终止问题会话 SELECT pg_terminate_backend(pid);\n2. 检查应用代码，避免在事务中执行耗时操作\n3. 配置 statement_timeout 和 lock_timeout 防止长时间锁等待\n4. DDL 操作应在低峰期执行，使用 CONCURRENTLY 选项",
+    "anomalies": [
+      {
+        "description": "wait_event 显示大量 Lock:relation 和 Lock:tuple 等待",
+        "observation_method": "SELECT pid, wait_event_type, wait_event, state, query FROM pg_stat_activity WHERE wait_event IS NOT NULL;",
+        "why_relevant": "存在锁等待，需要定位持锁的会话"
+      },
+      {
+        "description": "发现一个运行超过 2 小时的长事务持有排他锁",
+        "observation_method": "SELECT pid, usename, application_name, state, query_start, state_change, query FROM pg_stat_activity WHERE state != 'idle' AND (now() - query_start) > interval '10 minutes' ORDER BY query_start;",
+        "why_relevant": "长事务阻塞了后续的写操作，导致锁等待队列积压"
+      },
+      {
+        "description": "pg_locks 显示该事务持有 orders 表的 AccessExclusiveLock",
+        "observation_method": "SELECT l.locktype, l.database, l.relation::regclass, l.page, l.tuple, l.virtualxid, l.transactionid, l.mode, l.granted, a.query FROM pg_locks l LEFT JOIN pg_stat_activity a ON l.pid = a.pid WHERE NOT l.granted OR l.mode = 'AccessExclusiveLock';",
+        "why_relevant": "确认是 DDL 操作（ALTER TABLE）导致的表级锁"
+      }
+    ]
   },
   {
     "ticket_id": "DB-013",
@@ -369,25 +369,25 @@
       "created_at": "2024-11-02T14:30:00Z"
     },
     "description": "应用频繁报死锁错误 deadlock detected",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "PostgreSQL 日志显示每小时发生 50+ 次死锁",
-        "observation_method": "grep 'deadlock detected' /var/log/postgresql/postgresql-*.log | wc -l",
-        "analysis_result": "死锁频率异常高，需要定位死锁场景"
-      },
-      {
-        "observed_fact": "日志显示死锁涉及 order_items 和 inventory 表",
-        "observation_method": "分析 PostgreSQL 日志中的 DETAIL 部分，查看死锁详情",
-        "analysis_result": "两个事务以不同顺序访问这两个表，导致循环等待"
-      },
-      {
-        "observed_fact": "应用代码先更新 inventory 再更新 order_items，另一处先更新 order_items 再更新 inventory",
-        "observation_method": "代码审查，检查事务中的表访问顺序",
-        "analysis_result": "确认是代码逻辑导致的锁顺序不一致"
-      }
-    ],
     "root_cause": "事务访问表的顺序不一致导致死锁",
-    "solution": "1. 统一事务中表的访问顺序：所有事务都按相同顺序访问表\n2. 减少事务持有锁的时间，尽快提交\n3. 使用 SELECT ... FOR UPDATE 显式加锁，控制锁粒度\n4. 应用层实现死锁重试机制\n5. 启用 log_lock_waits 监控锁等待"
+    "solution": "1. 统一事务中表的访问顺序：所有事务都按相同顺序访问表\n2. 减少事务持有锁的时间，尽快提交\n3. 使用 SELECT ... FOR UPDATE 显式加锁，控制锁粒度\n4. 应用层实现死锁重试机制\n5. 启用 log_lock_waits 监控锁等待",
+    "anomalies": [
+      {
+        "description": "PostgreSQL 日志显示每小时发生 50+ 次死锁",
+        "observation_method": "grep 'deadlock detected' /var/log/postgresql/postgresql-*.log | wc -l",
+        "why_relevant": "死锁频率异常高，需要定位死锁场景"
+      },
+      {
+        "description": "日志显示死锁涉及 order_items 和 inventory 表",
+        "observation_method": "分析 PostgreSQL 日志中的 DETAIL 部分，查看死锁详情",
+        "why_relevant": "两个事务以不同顺序访问这两个表，导致循环等待"
+      },
+      {
+        "description": "应用代码先更新 inventory 再更新 order_items，另一处先更新 order_items 再更新 inventory",
+        "observation_method": "代码审查，检查事务中的表访问顺序",
+        "why_relevant": "确认是代码逻辑导致的锁顺序不一致"
+      }
+    ]
   },
   {
     "ticket_id": "DB-014",
@@ -399,25 +399,25 @@
       "created_at": "2024-11-03T09:15:00Z"
     },
     "description": "数据库内存使用率持续增长至 95%，触发 OOM Killer 导致进程被杀",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "系统日志显示 Out of memory: Kill process postgres",
-        "observation_method": "dmesg | grep -i 'out of memory'",
-        "analysis_result": "数据库进程因内存耗尽被操作系统杀死"
-      },
-      {
-        "observed_fact": "work_mem 设置为 1GB，shared_buffers 为 16GB",
-        "observation_method": "SHOW work_mem; SHOW shared_buffers;",
-        "analysis_result": "work_mem 过大，多个并发查询会消耗大量内存"
-      },
-      {
-        "observed_fact": "高峰期有 200 个并发会话，每个执行复杂排序查询",
-        "observation_method": "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'; 查看慢查询日志",
-        "analysis_result": "200 个会话 * 1GB work_mem = 理论 200GB 内存需求，远超物理内存"
-      }
-    ],
     "root_cause": "work_mem 配置过大导致内存超限",
-    "solution": "1. 降低 work_mem: ALTER SYSTEM SET work_mem = '64MB'; SELECT pg_reload_conf();\n2. 对特定需要大内存的查询，在会话级设置: SET work_mem = '512MB'; 执行查询后恢复\n3. 优化复杂查询，减少排序和 Hash Join 内存需求\n4. 监控内存使用，配置合理的 vm.overcommit_memory"
+    "solution": "1. 降低 work_mem: ALTER SYSTEM SET work_mem = '64MB'; SELECT pg_reload_conf();\n2. 对特定需要大内存的查询，在会话级设置: SET work_mem = '512MB'; 执行查询后恢复\n3. 优化复杂查询，减少排序和 Hash Join 内存需求\n4. 监控内存使用，配置合理的 vm.overcommit_memory",
+    "anomalies": [
+      {
+        "description": "系统日志显示 Out of memory: Kill process postgres",
+        "observation_method": "dmesg | grep -i 'out of memory'",
+        "why_relevant": "数据库进程因内存耗尽被操作系统杀死"
+      },
+      {
+        "description": "work_mem 设置为 1GB，shared_buffers 为 16GB",
+        "observation_method": "SHOW work_mem; SHOW shared_buffers;",
+        "why_relevant": "work_mem 过大，多个并发查询会消耗大量内存"
+      },
+      {
+        "description": "高峰期有 200 个并发会话，每个执行复杂排序查询",
+        "observation_method": "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'; 查看慢查询日志",
+        "why_relevant": "200 个会话 * 1GB work_mem = 理论 200GB 内存需求，远超物理内存"
+      }
+    ]
   },
   {
     "ticket_id": "DB-015",
@@ -429,25 +429,25 @@
       "created_at": "2024-11-04T13:45:00Z"
     },
     "description": "数据库重启后查询性能极差，需要 1 小时才能恢复正常",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "重启后 shared_buffers 缓存命中率很低（< 50%）",
-        "observation_method": "SELECT sum(heap_blks_hit) / nullif(sum(heap_blks_hit) + sum(heap_blks_read), 0) as cache_hit_ratio FROM pg_statio_user_tables;",
-        "analysis_result": "Shared buffers 为空，需要重新加载热数据"
-      },
-      {
-        "observed_fact": "没有使用 pg_prewarm 扩展预热缓存",
-        "observation_method": "SELECT * FROM pg_extension WHERE extname = 'pg_prewarm';",
-        "analysis_result": "未安装缓存预热工具，每次重启都需要自然预热"
-      },
-      {
-        "observed_fact": "安装并使用 pg_prewarm 后，重启后 5 分钟内缓存命中率即恢复到 90%",
-        "observation_method": "CREATE EXTENSION pg_prewarm; SELECT pg_prewarm('hot_table'); 重启测试",
-        "analysis_result": "预热关键表可显著加速重启后的性能恢复"
-      }
-    ],
     "root_cause": "未配置缓存预热导致重启后性能差",
-    "solution": "1. 安装 pg_prewarm 扩展: CREATE EXTENSION pg_prewarm;\n2. 在启动脚本中预热关键表: SELECT pg_prewarm('table_name');\n3. 使用 autoprewarm 自动记录和恢复: ALTER SYSTEM SET shared_preload_libraries = 'pg_prewarm'; 重启\n4. 调整 shared_buffers 大小以容纳更多热数据"
+    "solution": "1. 安装 pg_prewarm 扩展: CREATE EXTENSION pg_prewarm;\n2. 在启动脚本中预热关键表: SELECT pg_prewarm('table_name');\n3. 使用 autoprewarm 自动记录和恢复: ALTER SYSTEM SET shared_preload_libraries = 'pg_prewarm'; 重启\n4. 调整 shared_buffers 大小以容纳更多热数据",
+    "anomalies": [
+      {
+        "description": "重启后 shared_buffers 缓存命中率很低（< 50%）",
+        "observation_method": "SELECT sum(heap_blks_hit) / nullif(sum(heap_blks_hit) + sum(heap_blks_read), 0) as cache_hit_ratio FROM pg_statio_user_tables;",
+        "why_relevant": "Shared buffers 为空，需要重新加载热数据"
+      },
+      {
+        "description": "没有使用 pg_prewarm 扩展预热缓存",
+        "observation_method": "SELECT * FROM pg_extension WHERE extname = 'pg_prewarm';",
+        "why_relevant": "未安装缓存预热工具，每次重启都需要自然预热"
+      },
+      {
+        "description": "安装并使用 pg_prewarm 后，重启后 5 分钟内缓存命中率即恢复到 90%",
+        "observation_method": "CREATE EXTENSION pg_prewarm; SELECT pg_prewarm('hot_table'); 重启测试",
+        "why_relevant": "预热关键表可显著加速重启后的性能恢复"
+      }
+    ]
   },
   {
     "ticket_id": "DB-016",
@@ -459,25 +459,25 @@
       "created_at": "2024-11-05T10:20:00Z"
     },
     "description": "数据库周期性性能抖动，每隔 5 分钟响应时间明显增加",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_bgwriter 显示 checkpoint 每 5 分钟触发一次",
-        "observation_method": "SELECT * FROM pg_stat_bgwriter;",
-        "analysis_result": "频繁的 checkpoint 导致性能抖动"
-      },
-      {
-        "observed_fact": "checkpoint_timeout 设置为 5 分钟",
-        "observation_method": "SHOW checkpoint_timeout;",
-        "analysis_result": "checkpoint 间隔过短，增加 IO 压力"
-      },
-      {
-        "observed_fact": "checkpoint 期间 iostat 显示磁盘 IO 利用率飙升至 100%",
-        "observation_method": "iostat -x 1 观察 checkpoint 期间的磁盘 IO",
-        "analysis_result": "checkpoint 刷盘操作导致 IO 峰值"
-      }
-    ],
     "root_cause": "checkpoint 间隔过短导致频繁刷盘",
-    "solution": "1. 增加 checkpoint 间隔: ALTER SYSTEM SET checkpoint_timeout = '15min'; SELECT pg_reload_conf();\n2. 调整 checkpoint_completion_target 平滑刷盘: ALTER SYSTEM SET checkpoint_completion_target = 0.9;\n3. 增大 max_wal_size 减少 WAL checkpoint: ALTER SYSTEM SET max_wal_size = '4GB';\n4. 监控 checkpoint 统计，优化参数"
+    "solution": "1. 增加 checkpoint 间隔: ALTER SYSTEM SET checkpoint_timeout = '15min'; SELECT pg_reload_conf();\n2. 调整 checkpoint_completion_target 平滑刷盘: ALTER SYSTEM SET checkpoint_completion_target = 0.9;\n3. 增大 max_wal_size 减少 WAL checkpoint: ALTER SYSTEM SET max_wal_size = '4GB';\n4. 监控 checkpoint 统计，优化参数",
+    "anomalies": [
+      {
+        "description": "pg_stat_bgwriter 显示 checkpoint 每 5 分钟触发一次",
+        "observation_method": "SELECT * FROM pg_stat_bgwriter;",
+        "why_relevant": "频繁的 checkpoint 导致性能抖动"
+      },
+      {
+        "description": "checkpoint_timeout 设置为 5 分钟",
+        "observation_method": "SHOW checkpoint_timeout;",
+        "why_relevant": "checkpoint 间隔过短，增加 IO 压力"
+      },
+      {
+        "description": "checkpoint 期间 iostat 显示磁盘 IO 利用率飙升至 100%",
+        "observation_method": "iostat -x 1 观察 checkpoint 期间的磁盘 IO",
+        "why_relevant": "checkpoint 刷盘操作导致 IO 峰值"
+      }
+    ]
   },
   {
     "ticket_id": "DB-017",
@@ -489,25 +489,25 @@
       "created_at": "2024-11-06T15:30:00Z"
     },
     "description": "ALTER TABLE 执行导致应用大量超时，业务几乎停摆",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_activity 显示大量 waiting for lock 状态",
-        "observation_method": "SELECT pid, wait_event_type, wait_event, state, query FROM pg_stat_activity WHERE wait_event_type = 'Lock';",
-        "analysis_result": "DDL 操作获取 AccessExclusiveLock，阻塞了所有后续操作"
-      },
-      {
-        "observed_fact": "ALTER TABLE 添加列操作已运行 2 小时",
-        "observation_method": "SELECT pid, query_start, now() - query_start as duration, query FROM pg_stat_activity WHERE query LIKE 'ALTER TABLE%';",
-        "analysis_result": "ALTER TABLE 需要重写整个表，耗时很长"
-      },
-      {
-        "observed_fact": "表大小为 500GB，添加 NOT NULL 列需要全表扫描验证",
-        "observation_method": "SELECT pg_size_pretty(pg_total_relation_size('target_table'));",
-        "analysis_result": "大表 DDL 应避免需要表重写的操作"
-      }
-    ],
     "root_cause": "大表 DDL 锁表导致业务阻塞",
-    "solution": "1. 立即终止 DDL 操作: SELECT pg_terminate_backend(pid);\n2. 使用不锁表的 DDL 方式: ALTER TABLE ... ADD COLUMN ... DEFAULT NULL; (无默认值不重写表)\n3. 对于必须重写表的操作，使用 pg_repack 工具在线重组\n4. 大表 DDL 应在低峰期执行，使用 lock_timeout 限制等锁时间"
+    "solution": "1. 立即终止 DDL 操作: SELECT pg_terminate_backend(pid);\n2. 使用不锁表的 DDL 方式: ALTER TABLE ... ADD COLUMN ... DEFAULT NULL; (无默认值不重写表)\n3. 对于必须重写表的操作，使用 pg_repack 工具在线重组\n4. 大表 DDL 应在低峰期执行，使用 lock_timeout 限制等锁时间",
+    "anomalies": [
+      {
+        "description": "pg_stat_activity 显示大量 waiting for lock 状态",
+        "observation_method": "SELECT pid, wait_event_type, wait_event, state, query FROM pg_stat_activity WHERE wait_event_type = 'Lock';",
+        "why_relevant": "DDL 操作获取 AccessExclusiveLock，阻塞了所有后续操作"
+      },
+      {
+        "description": "ALTER TABLE 添加列操作已运行 2 小时",
+        "observation_method": "SELECT pid, query_start, now() - query_start as duration, query FROM pg_stat_activity WHERE query LIKE 'ALTER TABLE%';",
+        "why_relevant": "ALTER TABLE 需要重写整个表，耗时很长"
+      },
+      {
+        "description": "表大小为 500GB，添加 NOT NULL 列需要全表扫描验证",
+        "observation_method": "SELECT pg_size_pretty(pg_total_relation_size('target_table'));",
+        "why_relevant": "大表 DDL 应避免需要表重写的操作"
+      }
+    ]
   },
   {
     "ticket_id": "DB-018",
@@ -519,25 +519,25 @@
       "created_at": "2024-11-05T10:15:00Z"
     },
     "description": "定时任务执行变慢，从原来的 10 分钟增加到 1 小时",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "wait_io 占比 70%，明显高于正常水平",
-        "observation_method": "SELECT wait_event_type, wait_event, COUNT(*) FROM pg_stat_activity WHERE wait_event IS NOT NULL GROUP BY wait_event_type, wait_event ORDER BY COUNT(*) DESC;",
-        "analysis_result": "IO 瓶颈，需要定位具体是哪个表或索引"
-      },
-      {
-        "observed_fact": "多个索引大小异常，部分索引碎片化严重",
-        "observation_method": "SELECT schemaname, tablename, indexname, pg_size_pretty(pg_relation_size(indexrelid)) as size, idx_scan, idx_tup_read, idx_tup_fetch FROM pg_indexes JOIN pg_stat_user_indexes USING (schemaname, tablename, indexname) ORDER BY pg_relation_size(indexrelid) DESC LIMIT 20;",
-        "analysis_result": "频繁更新导致索引碎片化，部分索引已膨胀 5 倍"
-      },
-      {
-        "observed_fact": "执行 REINDEX 后性能恢复正常",
-        "observation_method": "REINDEX INDEX CONCURRENTLY task_log_idx; 然后监控任务执行时间",
-        "analysis_result": "确认索引碎片化是根因"
-      }
-    ],
     "root_cause": "频繁更新导致索引碎片化",
-    "solution": "1. 对受影响的索引执行 REINDEX INDEX CONCURRENTLY\n2. 配置更激进的 autovacuum 参数\n3. 对于频繁更新的表，考虑使用 fillfactor 参数预留更新空间: CREATE INDEX ... WITH (fillfactor = 80);\n4. 建立定期 REINDEX 计划（每月一次）"
+    "solution": "1. 对受影响的索引执行 REINDEX INDEX CONCURRENTLY\n2. 配置更激进的 autovacuum 参数\n3. 对于频繁更新的表，考虑使用 fillfactor 参数预留更新空间: CREATE INDEX ... WITH (fillfactor = 80);\n4. 建立定期 REINDEX 计划（每月一次）",
+    "anomalies": [
+      {
+        "description": "wait_io 占比 70%，明显高于正常水平",
+        "observation_method": "SELECT wait_event_type, wait_event, COUNT(*) FROM pg_stat_activity WHERE wait_event IS NOT NULL GROUP BY wait_event_type, wait_event ORDER BY COUNT(*) DESC;",
+        "why_relevant": "IO 瓶颈，需要定位具体是哪个表或索引"
+      },
+      {
+        "description": "多个索引大小异常，部分索引碎片化严重",
+        "observation_method": "SELECT schemaname, tablename, indexname, pg_size_pretty(pg_relation_size(indexrelid)) as size, idx_scan, idx_tup_read, idx_tup_fetch FROM pg_indexes JOIN pg_stat_user_indexes USING (schemaname, tablename, indexname) ORDER BY pg_relation_size(indexrelid) DESC LIMIT 20;",
+        "why_relevant": "频繁更新导致索引碎片化，部分索引已膨胀 5 倍"
+      },
+      {
+        "description": "执行 REINDEX 后性能恢复正常",
+        "observation_method": "REINDEX INDEX CONCURRENTLY task_log_idx; 然后监控任务执行时间",
+        "why_relevant": "确认索引碎片化是根因"
+      }
+    ]
   },
   {
     "ticket_id": "DB-019",
@@ -549,25 +549,25 @@
       "created_at": "2024-11-07T11:00:00Z"
     },
     "description": "复杂查询导致磁盘临时文件创建，查询性能极差",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_database 显示 temp_files 和 temp_bytes 持续增长",
-        "observation_method": "SELECT datname, temp_files, pg_size_pretty(temp_bytes) FROM pg_stat_database;",
-        "analysis_result": "大量临时文件被创建到磁盘，work_mem 不足"
-      },
-      {
-        "observed_fact": "work_mem 设置为 4MB，对于复杂查询明显不足",
-        "observation_method": "SHOW work_mem;",
-        "analysis_result": "work_mem 过小，排序和 Hash Join 操作溢出到磁盘"
-      },
-      {
-        "observed_fact": "EXPLAIN ANALYZE 显示查询使用了大量 external sort 和 hash batches",
-        "observation_method": "EXPLAIN (ANALYZE, BUFFERS) SELECT ... 查看 Sort Method 和 Hash Buckets/Batches",
-        "analysis_result": "复杂排序和 Join 操作超出 work_mem 限制"
-      }
-    ],
     "root_cause": "work_mem 配置过小导致磁盘临时文件",
-    "solution": "1. 适当增加 work_mem: ALTER SYSTEM SET work_mem = '64MB'; SELECT pg_reload_conf();\n2. 对特定复杂查询在会话级增大: SET work_mem = '256MB'; 执行查询\n3. 优化查询，添加索引避免排序: CREATE INDEX idx_name ON table(col);\n4. 使用 temp_file_limit 限制单个查询的临时文件大小"
+    "solution": "1. 适当增加 work_mem: ALTER SYSTEM SET work_mem = '64MB'; SELECT pg_reload_conf();\n2. 对特定复杂查询在会话级增大: SET work_mem = '256MB'; 执行查询\n3. 优化查询，添加索引避免排序: CREATE INDEX idx_name ON table(col);\n4. 使用 temp_file_limit 限制单个查询的临时文件大小",
+    "anomalies": [
+      {
+        "description": "pg_stat_database 显示 temp_files 和 temp_bytes 持续增长",
+        "observation_method": "SELECT datname, temp_files, pg_size_pretty(temp_bytes) FROM pg_stat_database;",
+        "why_relevant": "大量临时文件被创建到磁盘，work_mem 不足"
+      },
+      {
+        "description": "work_mem 设置为 4MB，对于复杂查询明显不足",
+        "observation_method": "SHOW work_mem;",
+        "why_relevant": "work_mem 过小，排序和 Hash Join 操作溢出到磁盘"
+      },
+      {
+        "description": "EXPLAIN ANALYZE 显示查询使用了大量 external sort 和 hash batches",
+        "observation_method": "EXPLAIN (ANALYZE, BUFFERS) SELECT ... 查看 Sort Method 和 Hash Buckets/Batches",
+        "why_relevant": "复杂排序和 Join 操作超出 work_mem 限制"
+      }
+    ]
   },
   {
     "ticket_id": "DB-020",
@@ -579,25 +579,25 @@
       "created_at": "2024-11-08T14:15:00Z"
     },
     "description": "全文搜索查询变慢，响应时间从 100ms 增加到 5 秒",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "EXPLAIN 显示全文搜索索引未被使用，使用了顺序扫描",
-        "observation_method": "EXPLAIN SELECT * FROM articles WHERE to_tsvector('english', content) @@ to_tsquery('database');",
-        "analysis_result": "查询条件与索引定义不匹配，无法使用 GIN 索引"
-      },
-      {
-        "observed_fact": "GIN 索引定义为 to_tsvector('simple', content)，但查询使用 'english'",
-        "observation_method": "\\d articles 查看索引定义",
-        "analysis_result": "text search configuration 不匹配导致索引失效"
-      },
-      {
-        "observed_fact": "修改查询使用 'simple' 配置后，使用了索引，速度恢复到 50ms",
-        "observation_method": "EXPLAIN SELECT * FROM articles WHERE to_tsvector('simple', content) @@ to_tsquery('simple', 'database');",
-        "analysis_result": "确认配置不匹配是根因"
-      }
-    ],
     "root_cause": "全文搜索配置不匹配导致索引失效",
-    "solution": "1. 统一使用相同的 text search configuration\n2. 如需使用 'english'，重建索引: CREATE INDEX idx_content_fts ON articles USING gin(to_tsvector('english', content));\n3. 使用生成列避免查询时转换: ALTER TABLE articles ADD COLUMN content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED; CREATE INDEX ON articles USING gin(content_tsv);\n4. 定期 VACUUM 维护 GIN 索引"
+    "solution": "1. 统一使用相同的 text search configuration\n2. 如需使用 'english'，重建索引: CREATE INDEX idx_content_fts ON articles USING gin(to_tsvector('english', content));\n3. 使用生成列避免查询时转换: ALTER TABLE articles ADD COLUMN content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED; CREATE INDEX ON articles USING gin(content_tsv);\n4. 定期 VACUUM 维护 GIN 索引",
+    "anomalies": [
+      {
+        "description": "EXPLAIN 显示全文搜索索引未被使用，使用了顺序扫描",
+        "observation_method": "EXPLAIN SELECT * FROM articles WHERE to_tsvector('english', content) @@ to_tsquery('database');",
+        "why_relevant": "查询条件与索引定义不匹配，无法使用 GIN 索引"
+      },
+      {
+        "description": "GIN 索引定义为 to_tsvector('simple', content)，但查询使用 'english'",
+        "observation_method": "\\d articles 查看索引定义",
+        "why_relevant": "text search configuration 不匹配导致索引失效"
+      },
+      {
+        "description": "修改查询使用 'simple' 配置后，使用了索引，速度恢复到 50ms",
+        "observation_method": "EXPLAIN SELECT * FROM articles WHERE to_tsvector('simple', content) @@ to_tsquery('simple', 'database');",
+        "why_relevant": "确认配置不匹配是根因"
+      }
+    ]
   },
   {
     "ticket_id": "DB-021",
@@ -609,25 +609,25 @@
       "created_at": "2024-11-09T09:30:00Z"
     },
     "description": "删除订单记录时性能极差，单条删除需要 10 秒",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "EXPLAIN ANALYZE 显示删除操作触发了大量外键检查",
-        "observation_method": "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM orders WHERE order_id = 12345;",
-        "analysis_result": "级联删除触发了大量外键约束检查"
-      },
-      {
-        "observed_fact": "orders 表有 5 个子表，每个子表有数千条关联记录",
-        "observation_method": "SELECT conname, conrelid::regclass, confrelid::regclass FROM pg_constraint WHERE confrelid = 'orders'::regclass;",
-        "analysis_result": "外键关系复杂，级联操作代价高"
-      },
-      {
-        "observed_fact": "部分子表的外键列未建立索引",
-        "observation_method": "检查子表外键列是否有索引: SELECT * FROM pg_indexes WHERE tablename = 'order_items';",
-        "analysis_result": "外键列缺少索引，导致每次删除都全表扫描子表"
-      }
-    ],
     "root_cause": "外键列缺少索引 + 复杂级联关系",
-    "solution": "1. 在所有外键列上创建索引: CREATE INDEX idx_order_id ON order_items(order_id);\n2. 考虑改为应用层控制级联删除，而非数据库级联\n3. 批量删除时使用事务，减少外键检查开销\n4. 评估是否真正需要所有外键约束"
+    "solution": "1. 在所有外键列上创建索引: CREATE INDEX idx_order_id ON order_items(order_id);\n2. 考虑改为应用层控制级联删除，而非数据库级联\n3. 批量删除时使用事务，减少外键检查开销\n4. 评估是否真正需要所有外键约束",
+    "anomalies": [
+      {
+        "description": "EXPLAIN ANALYZE 显示删除操作触发了大量外键检查",
+        "observation_method": "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM orders WHERE order_id = 12345;",
+        "why_relevant": "级联删除触发了大量外键约束检查"
+      },
+      {
+        "description": "orders 表有 5 个子表，每个子表有数千条关联记录",
+        "observation_method": "SELECT conname, conrelid::regclass, confrelid::regclass FROM pg_constraint WHERE confrelid = 'orders'::regclass;",
+        "why_relevant": "外键关系复杂，级联操作代价高"
+      },
+      {
+        "description": "部分子表的外键列未建立索引",
+        "observation_method": "检查子表外键列是否有索引: SELECT * FROM pg_indexes WHERE tablename = 'order_items';",
+        "why_relevant": "外键列缺少索引，导致每次删除都全表扫描子表"
+      }
+    ]
   },
   {
     "ticket_id": "DB-022",
@@ -639,25 +639,25 @@
       "created_at": "2024-11-10T16:00:00Z"
     },
     "description": "大表聚合查询很慢，但服务器多核 CPU 利用率很低",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "聚合查询执行时，只有一个 CPU 核心 100%，其他核心空闲",
-        "observation_method": "top 命令观察 CPU 核心使用情况",
-        "analysis_result": "查询未使用并行执行，单线程处理"
-      },
-      {
-        "observed_fact": "max_parallel_workers_per_gather 设置为 0",
-        "observation_method": "SHOW max_parallel_workers_per_gather;",
-        "analysis_result": "并行查询被禁用"
-      },
-      {
-        "observed_fact": "启用并行查询后，查询时间从 60 秒降至 15 秒",
-        "observation_method": "SET max_parallel_workers_per_gather = 4; 执行查询观察性能",
-        "analysis_result": "并行查询可显著提升大表聚合性能"
-      }
-    ],
     "root_cause": "并行查询未启用导致无法利用多核",
-    "solution": "1. 启用并行查询: ALTER SYSTEM SET max_parallel_workers_per_gather = 4; ALTER SYSTEM SET max_parallel_workers = 8; SELECT pg_reload_conf();\n2. 调整 parallel_setup_cost 和 parallel_tuple_cost 参数\n3. 确保表统计信息准确: ANALYZE table_name;\n4. 监控并行查询使用情况"
+    "solution": "1. 启用并行查询: ALTER SYSTEM SET max_parallel_workers_per_gather = 4; ALTER SYSTEM SET max_parallel_workers = 8; SELECT pg_reload_conf();\n2. 调整 parallel_setup_cost 和 parallel_tuple_cost 参数\n3. 确保表统计信息准确: ANALYZE table_name;\n4. 监控并行查询使用情况",
+    "anomalies": [
+      {
+        "description": "聚合查询执行时，只有一个 CPU 核心 100%，其他核心空闲",
+        "observation_method": "top 命令观察 CPU 核心使用情况",
+        "why_relevant": "查询未使用并行执行，单线程处理"
+      },
+      {
+        "description": "max_parallel_workers_per_gather 设置为 0",
+        "observation_method": "SHOW max_parallel_workers_per_gather;",
+        "why_relevant": "并行查询被禁用"
+      },
+      {
+        "description": "启用并行查询后，查询时间从 60 秒降至 15 秒",
+        "observation_method": "SET max_parallel_workers_per_gather = 4; 执行查询观察性能",
+        "why_relevant": "并行查询可显著提升大表聚合性能"
+      }
+    ]
   },
   {
     "ticket_id": "DB-023",
@@ -669,25 +669,25 @@
       "created_at": "2024-11-10T09:00:00Z"
     },
     "description": "数据库磁盘空间占用持续增长，需要优化存储",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "表膨胀率分析显示多个表的膨胀率超过 50%",
-        "observation_method": "SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as total_size, n_live_tup, n_dead_tup, round(100.0 * n_dead_tup / NULLIF(n_live_tup + n_dead_tup, 0), 2) as dead_ratio FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY n_dead_tup DESC;",
-        "analysis_result": "死元组积累导致表膨胀，需要执行 VACUUM FULL 或 pg_repack"
-      },
-      {
-        "observed_fact": "autovacuum 参数配置过于保守，清理不及时",
-        "observation_method": "SELECT name, setting, unit FROM pg_settings WHERE name LIKE 'autovacuum%';",
-        "analysis_result": "autovacuum_vacuum_scale_factor = 0.2 对于大表太保守"
-      },
-      {
-        "observed_fact": "执行 VACUUM FULL 后，表大小减少 40%",
-        "observation_method": "VACUUM FULL VERBOSE tablename; 然后对比表大小",
-        "analysis_result": "确认表膨胀问题，但 VACUUM FULL 需要锁表"
-      }
-    ],
     "root_cause": "autovacuum 配置不当导致表膨胀",
-    "solution": "1. 对于大表使用 pg_repack 在线重组（不锁表）\n2. 全局调整 autovacuum 参数:\n   - autovacuum_vacuum_scale_factor = 0.05\n   - autovacuum_analyze_scale_factor = 0.02\n3. 对于频繁更新的表，单独配置更激进的参数\n4. 配置监控告警，膨胀率超过 30% 时触发"
+    "solution": "1. 对于大表使用 pg_repack 在线重组（不锁表）\n2. 全局调整 autovacuum 参数:\n   - autovacuum_vacuum_scale_factor = 0.05\n   - autovacuum_analyze_scale_factor = 0.02\n3. 对于频繁更新的表，单独配置更激进的参数\n4. 配置监控告警，膨胀率超过 30% 时触发",
+    "anomalies": [
+      {
+        "description": "表膨胀率分析显示多个表的膨胀率超过 50%",
+        "observation_method": "SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as total_size, n_live_tup, n_dead_tup, round(100.0 * n_dead_tup / NULLIF(n_live_tup + n_dead_tup, 0), 2) as dead_ratio FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY n_dead_tup DESC;",
+        "why_relevant": "死元组积累导致表膨胀，需要执行 VACUUM FULL 或 pg_repack"
+      },
+      {
+        "description": "autovacuum 参数配置过于保守，清理不及时",
+        "observation_method": "SELECT name, setting, unit FROM pg_settings WHERE name LIKE 'autovacuum%';",
+        "why_relevant": "autovacuum_vacuum_scale_factor = 0.2 对于大表太保守"
+      },
+      {
+        "description": "执行 VACUUM FULL 后，表大小减少 40%",
+        "observation_method": "VACUUM FULL VERBOSE tablename; 然后对比表大小",
+        "why_relevant": "确认表膨胀问题，但 VACUUM FULL 需要锁表"
+      }
+    ]
   },
   {
     "ticket_id": "DB-024",
@@ -699,25 +699,25 @@
       "created_at": "2024-11-11T10:30:00Z"
     },
     "description": "逻辑复制槽积累大量 WAL，导致主库磁盘空间告警",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_replication_slots 显示某个复制槽的 restart_lsn 长期未推进",
-        "observation_method": "SELECT slot_name, slot_type, active, restart_lsn, pg_current_wal_lsn(), pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as retained_wal FROM pg_replication_slots;",
-        "analysis_result": "逻辑复制槽未激活或消费速度过慢，导致 WAL 积压"
-      },
-      {
-        "observed_fact": "订阅端数据库连接中断，复制槽变为 inactive",
-        "observation_method": "SELECT * FROM pg_stat_replication; 检查 active 字段",
-        "analysis_result": "订阅端故障导致复制槽无法消费 WAL"
-      },
-      {
-        "observed_fact": "删除或修复复制槽后，WAL 文件被自动清理",
-        "observation_method": "SELECT pg_drop_replication_slot('slot_name'); 或修复订阅端连接",
-        "analysis_result": "确认复制槽积压是 WAL 堆积的原因"
-      }
-    ],
     "root_cause": "逻辑复制槽故障导致 WAL 积压",
-    "solution": "1. 检查订阅端连接状态，修复网络或配置问题\n2. 如复制槽已废弃，删除它: SELECT pg_drop_replication_slot('slot_name');\n3. 配置 max_slot_wal_keep_size 限制复制槽保留的 WAL 大小\n4. 监控复制槽状态和 WAL 保留量，设置告警"
+    "solution": "1. 检查订阅端连接状态，修复网络或配置问题\n2. 如复制槽已废弃，删除它: SELECT pg_drop_replication_slot('slot_name');\n3. 配置 max_slot_wal_keep_size 限制复制槽保留的 WAL 大小\n4. 监控复制槽状态和 WAL 保留量，设置告警",
+    "anomalies": [
+      {
+        "description": "pg_replication_slots 显示某个复制槽的 restart_lsn 长期未推进",
+        "observation_method": "SELECT slot_name, slot_type, active, restart_lsn, pg_current_wal_lsn(), pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as retained_wal FROM pg_replication_slots;",
+        "why_relevant": "逻辑复制槽未激活或消费速度过慢，导致 WAL 积压"
+      },
+      {
+        "description": "订阅端数据库连接中断，复制槽变为 inactive",
+        "observation_method": "SELECT * FROM pg_stat_replication; 检查 active 字段",
+        "why_relevant": "订阅端故障导致复制槽无法消费 WAL"
+      },
+      {
+        "description": "删除或修复复制槽后，WAL 文件被自动清理",
+        "observation_method": "SELECT pg_drop_replication_slot('slot_name'); 或修复订阅端连接",
+        "why_relevant": "确认复制槽积压是 WAL 堆积的原因"
+      }
+    ]
   },
   {
     "ticket_id": "DB-025",
@@ -729,24 +729,24 @@
       "created_at": "2024-11-15T11:30:00Z"
     },
     "description": "某个复杂查询 CPU 使用率飙升到 100%，数据库响应变慢",
-    "diagnostic_steps": [
-      {
-        "observed_fact": "pg_stat_statements 显示某个查询的 mean_exec_time 为 50 秒",
-        "observation_method": "SELECT query, calls, mean_exec_time, total_exec_time FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;",
-        "analysis_result": "定位到慢查询，需要分析执行计划"
-      },
-      {
-        "observed_fact": "EXPLAIN 显示 Nested Loop 导致笛卡尔积，扫描行数达到 10 亿",
-        "observation_method": "EXPLAIN (ANALYZE, BUFFERS, VERBOSE) SELECT ... FROM table1 JOIN table2 ON ... JOIN table3 ON ...;",
-        "analysis_result": "缺少合适的索引导致优化器选择了低效的 Join 方式"
-      },
-      {
-        "observed_fact": "在 Join 列上创建索引后，查询时间降低到 0.5 秒",
-        "observation_method": "CREATE INDEX CONCURRENTLY idx_table2_join_col ON table2(join_column); 然后重新执行查询",
-        "analysis_result": "确认缺少索引是根因"
-      }
-    ],
     "root_cause": "缺少索引导致低效 Join",
-    "solution": "1. 创建缺失的索引: CREATE INDEX CONCURRENTLY idx_name ON table(column);\n2. 使用 pg_stat_statements 定期分析慢查询\n3. 对于多表 Join，确保 Join 列都有索引\n4. 考虑使用 auto_explain 模块自动记录慢查询的执行计划"
+    "solution": "1. 创建缺失的索引: CREATE INDEX CONCURRENTLY idx_name ON table(column);\n2. 使用 pg_stat_statements 定期分析慢查询\n3. 对于多表 Join，确保 Join 列都有索引\n4. 考虑使用 auto_explain 模块自动记录慢查询的执行计划",
+    "anomalies": [
+      {
+        "description": "pg_stat_statements 显示某个查询的 mean_exec_time 为 50 秒",
+        "observation_method": "SELECT query, calls, mean_exec_time, total_exec_time FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;",
+        "why_relevant": "定位到慢查询，需要分析执行计划"
+      },
+      {
+        "description": "EXPLAIN 显示 Nested Loop 导致笛卡尔积，扫描行数达到 10 亿",
+        "observation_method": "EXPLAIN (ANALYZE, BUFFERS, VERBOSE) SELECT ... FROM table1 JOIN table2 ON ... JOIN table3 ON ...;",
+        "why_relevant": "缺少合适的索引导致优化器选择了低效的 Join 方式"
+      },
+      {
+        "description": "在 Join 列上创建索引后，查询时间降低到 0.5 秒",
+        "observation_method": "CREATE INDEX CONCURRENTLY idx_table2_join_col ON table2(join_column); 然后重新执行查询",
+        "why_relevant": "确认缺少索引是根因"
+      }
+    ]
   }
 ]
