@@ -1,7 +1,7 @@
 """测试 CLI 格式化器"""
 import pytest
 
-from cli.formatter import TextFormatter
+from dbdiag.cli.formatter import TextFormatter
 
 
 class TestTextFormatter:

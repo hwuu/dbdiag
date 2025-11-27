@@ -31,8 +31,8 @@ dbdiag/
 │   │   ├── embedding_service.py  # 向量化服务
 │   │   └── llm_service.py        # LLM 调用
 │   ├── models/             # 数据模型
+│   ├── cli/                # 命令行界面
 │   └── utils/              # 工具函数
-├── cli/                  # 命令行界面（应用层）
 ├── scripts/              # 初始化脚本
 │   ├── init_db.py              # 创建数据库
 │   ├── import_tickets.py       # 导入工单数据

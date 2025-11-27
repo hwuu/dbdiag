@@ -23,7 +23,7 @@ def main():
 @main.command("cli")
 def interactive_cli():
     """启动交互式命令行诊断（推荐）"""
-    from cli.main import main as cli_main
+    from dbdiag.cli.main import main as cli_main
     cli_main()
 
 

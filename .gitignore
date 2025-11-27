@@ -213,5 +213,7 @@ config.yaml
 # Claude Code 本地配置
 .claude/
 
+knowledge_graph.html
+kg_*.html
 *.db
 nul
