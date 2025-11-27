@@ -6,7 +6,7 @@ import sqlite3
 import json
 from typing import List, Dict, Any
 
-from dbdiag.models.session import SessionState
+from dbdiag.models import SessionState
 from dbdiag.services.llm_service import LLMService
 
 
@@ -90,14 +90,17 @@ class ResponseGenerator:
         Returns:
             响应字典
         """
-        root_cause = recommendation["root_cause"]
+        root_cause_id = recommendation["root_cause"]  # 现在是 root_cause_id
         confidence = recommendation["confidence"]
 
+        # 获取根因描述文本
+        root_cause_description = self._get_root_cause_description(root_cause_id)
+
         # 获取相关工单引用
-        citations = self._get_citations_for_root_cause(root_cause)
+        citations = self._get_citations_for_root_cause(root_cause_id)
 
         # 获取解决方案
-        solution = self._get_solution_for_root_cause(root_cause)
+        solution = self._get_solution_for_root_cause(root_cause_id)
 
         # 获取已确认现象详情
         confirmed_ids = [cp.phenomenon_id for cp in session.confirmed_phenomena]
@@ -108,12 +111,12 @@ class ResponseGenerator:
             user_problem=session.user_problem,
             confirmed_phenomena=session.confirmed_phenomena,
             phenomenon_details=phenomenon_details,
-            root_cause=root_cause,
+            root_cause=root_cause_description,
             solution=solution,
             citations=citations,
         )
 
-        message = f"""**根因已定位：{root_cause}** (置信度: {confidence:.0%})
+        message = f"""**根因已定位：{root_cause_description}** (置信度: {confidence:.0%})
 
 {diagnosis_summary}
 
@@ -133,7 +136,8 @@ class ResponseGenerator:
         return {
             "action": "confirm_root_cause",
             "message": message,
-            "root_cause": root_cause,
+            "root_cause": root_cause_description,  # 返回描述文本
+            "root_cause_id": root_cause_id,
             "confidence": confidence,
             "solution": solution,
             "citations": citations,
@@ -232,12 +236,12 @@ class ResponseGenerator:
             "message": question,
         }
 
-    def _get_citations_for_root_cause(self, root_cause: str) -> List[Dict[str, str]]:
+    def _get_citations_for_root_cause(self, root_cause_id: str) -> List[Dict[str, str]]:
         """
         获取根因的引用工单
 
         Args:
-            root_cause: 根因
+            root_cause_id: 根因 ID
 
         Returns:
             引用列表
@@ -250,11 +254,11 @@ class ResponseGenerator:
             cursor.execute(
                 """
                 SELECT ticket_id, description, root_cause, solution
-                FROM raw_tickets
-                WHERE root_cause = ?
+                FROM tickets
+                WHERE root_cause_id = ?
                 LIMIT 3
                 """,
-                (root_cause,),
+                (root_cause_id,),
             )
 
             rows = cursor.fetchall()
@@ -263,12 +267,12 @@ class ResponseGenerator:
         finally:
             conn.close()
 
-    def _get_solution_for_root_cause(self, root_cause: str) -> str:
+    def _get_solution_for_root_cause(self, root_cause_id: str) -> str:
         """
         获取根因的解决方案
 
         Args:
-            root_cause: 根因
+            root_cause_id: 根因 ID
 
         Returns:
             解决方案文本
@@ -280,18 +284,49 @@ class ResponseGenerator:
             cursor.execute(
                 """
                 SELECT solution
-                FROM raw_tickets
-                WHERE root_cause = ?
-                LIMIT 1
+                FROM root_causes
+                WHERE root_cause_id = ?
                 """,
-                (root_cause,),
+                (root_cause_id,),
             )
 
             row = cursor.fetchone()
-            if row:
+            if row and row[0]:
                 return row[0]
 
             return "暂无具体解决方案，请参考相关工单。"
+
+        finally:
+            conn.close()
+
+    def _get_root_cause_description(self, root_cause_id: str) -> str:
+        """
+        获取根因描述文本
+
+        Args:
+            root_cause_id: 根因 ID
+
+        Returns:
+            根因描述文本
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                """
+                SELECT description
+                FROM root_causes
+                WHERE root_cause_id = ?
+                """,
+                (root_cause_id,),
+            )
+
+            row = cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+
+            return root_cause_id  # 找不到时返回 ID
 
         finally:
             conn.close()

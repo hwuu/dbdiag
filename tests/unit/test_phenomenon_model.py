@@ -1,7 +1,7 @@
 """测试 phenomenon 数据模型"""
 import pytest
 from datetime import datetime
-from dbdiag.models.phenomenon import (
+from dbdiag.models import (
     RawAnomaly,
     Phenomenon,
     TicketAnomaly,

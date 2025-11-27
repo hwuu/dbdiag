@@ -7,8 +7,7 @@ import json
 from typing import Optional, List, Dict
 from collections import defaultdict
 
-from dbdiag.models.session import SessionState, Hypothesis
-from dbdiag.models.phenomenon import Phenomenon
+from dbdiag.models import SessionState, Hypothesis, Phenomenon
 from dbdiag.services.llm_service import LLMService
 
 
@@ -78,11 +77,11 @@ class PhenomenonRecommendationEngine:
         """生成根因确认响应"""
         return {
             "action": "confirm_root_cause",
-            "root_cause": hypothesis.root_cause,
+            "root_cause": hypothesis.root_cause_id,  # 暂时 root_cause_id 存储的是文本
             "confidence": hypothesis.confidence,
             "supporting_phenomenon_ids": hypothesis.supporting_phenomenon_ids,
             "supporting_ticket_ids": hypothesis.supporting_ticket_ids,
-            "message": f"根因已定位：{hypothesis.root_cause} (置信度: {hypothesis.confidence:.0%})",
+            "message": f"根因已定位：{hypothesis.root_cause_id} (置信度: {hypothesis.confidence:.0%})",
         }
 
     def _collect_phenomena_for_recommendation(
@@ -138,7 +137,7 @@ class PhenomenonRecommendationEngine:
                     )
                     # 记录关联的假设
                     phenomenon_scores[phenomenon_id]["related_hypotheses"].append({
-                        "root_cause": hyp.root_cause,
+                        "root_cause": hyp.root_cause_id,  # 暂时 root_cause_id 存储的是文本
                         "confidence": hyp.confidence,
                     })
 
@@ -303,6 +302,21 @@ class PhenomenonRecommendationEngine:
                     return True
             return False
 
+    def _get_root_cause_description(self, root_cause_id: str) -> str:
+        """根据 ID 获取根因描述"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                "SELECT description FROM root_causes WHERE root_cause_id = ?",
+                (root_cause_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else root_cause_id
+        finally:
+            conn.close()
+
     def _get_phenomenon_by_id(self, phenomenon_id: str) -> Optional[Phenomenon]:
         """根据 ID 获取现象"""
         conn = sqlite3.connect(self.db_path)
@@ -355,7 +369,9 @@ class PhenomenonRecommendationEngine:
             if related_hypotheses:
                 # 取置信度最高的假设作为主要原因
                 top_hyp = max(related_hypotheses, key=lambda h: h["confidence"])
-                reason = f"可能与「{top_hyp['root_cause']}」相关"
+                # 获取根因描述
+                root_cause_desc = self._get_root_cause_description(top_hyp['root_cause'])
+                reason = f"可能与「{root_cause_desc}」相关"
             else:
                 reason = ""
 
@@ -387,11 +403,11 @@ class PhenomenonRecommendationEngine:
         self, session: SessionState, hypothesis: Hypothesis
     ) -> Dict:
         """询问关键症状"""
-        if hypothesis.missing_facts:
-            missing_fact = hypothesis.missing_facts[0]
+        if hypothesis.missing_phenomena:
+            missing_phenomenon = hypothesis.missing_phenomena[0]
             return {
                 "action": "ask_symptom",
-                "message": f"请确认是否观察到以下现象：{missing_fact}",
+                "message": f"请确认是否观察到以下现象：{missing_phenomenon}",
             }
 
         return {

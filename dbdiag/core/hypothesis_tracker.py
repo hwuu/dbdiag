@@ -7,8 +7,7 @@ import json
 from typing import List, Set, Dict, Optional
 from collections import defaultdict
 
-from dbdiag.models.session import SessionState, Hypothesis
-from dbdiag.models.phenomenon import Phenomenon
+from dbdiag.models import SessionState, Hypothesis, Phenomenon
 from dbdiag.core.retriever import PhenomenonRetriever
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
@@ -67,19 +66,20 @@ class PhenomenonHypothesisTracker:
         # 2. 为每个根因构建假设
         hypotheses = []
         total_candidates = len(root_cause_candidates)
-        for idx, (root_cause, supporting_data) in enumerate(root_cause_candidates.items(), 1):
-            # 显示评估进度（截取根因前20个字符）
-            root_cause_short = root_cause[:20] + "..." if len(root_cause) > 20 else root_cause
-            self._report_progress(f"评估假设 ({idx}/{total_candidates}): {root_cause_short}")
+        denied_ids = set(session.denied_phenomenon_ids)
+        for idx, (root_cause_id, supporting_data) in enumerate(root_cause_candidates.items(), 1):
+            # 显示评估进度
+            self._report_progress(f"评估假设 ({idx}/{total_candidates}): {root_cause_id}")
 
             phenomena = supporting_data["phenomena"]
             ticket_ids = supporting_data["ticket_ids"]
 
-            # 计算置信度（基于 confirmed_phenomena）
+            # 计算置信度（基于 confirmed_phenomena 和 denied_phenomena）
             confidence = self._compute_confidence(
-                root_cause=root_cause,
+                root_cause_id=root_cause_id,
                 supporting_phenomena=phenomena,
                 confirmed_phenomena=session.confirmed_phenomena,
+                denied_phenomenon_ids=denied_ids,
             )
 
             # 识别缺失的现象
@@ -98,10 +98,9 @@ class PhenomenonHypothesisTracker:
 
             hypotheses.append(
                 Hypothesis(
-                    root_cause=root_cause,
+                    root_cause_id=root_cause_id,
                     confidence=confidence,
-                    missing_facts=missing_phenomena,  # 复用字段存储 missing_phenomena
-                    # V2 字段
+                    missing_phenomena=missing_phenomena,
                     supporting_phenomenon_ids=[p.phenomenon_id for p in phenomena],
                     supporting_ticket_ids=ticket_ids,
                     next_recommended_phenomenon_id=next_phenomenon_id,
@@ -118,9 +117,9 @@ class PhenomenonHypothesisTracker:
                 penalty_factor = 0.7
                 for i in range(1, len(hypotheses)):
                     hypotheses[i] = Hypothesis(
-                        root_cause=hypotheses[i].root_cause,
+                        root_cause_id=hypotheses[i].root_cause_id,
                         confidence=hypotheses[i].confidence * penalty_factor,
-                        missing_facts=hypotheses[i].missing_facts,
+                        missing_phenomena=hypotheses[i].missing_phenomena,
                         supporting_phenomenon_ids=hypotheses[i].supporting_phenomenon_ids,
                         supporting_ticket_ids=hypotheses[i].supporting_ticket_ids,
                         next_recommended_phenomenon_id=hypotheses[i].next_recommended_phenomenon_id,
@@ -162,20 +161,21 @@ class PhenomenonHypothesisTracker:
             root_cause_map = defaultdict(lambda: {"phenomena": [], "ticket_ids": set()})
 
             for phenomenon, score in retrieved_phenomena:
-                # 查找关联的 tickets
+                # 查找关联的 tickets（使用 tickets 表，通过 root_cause_id 关联）
                 cursor.execute("""
-                    SELECT DISTINCT ta.ticket_id, rt.root_cause
+                    SELECT DISTINCT ta.ticket_id, t.root_cause_id
                     FROM ticket_anomalies ta
-                    JOIN raw_tickets rt ON ta.ticket_id = rt.ticket_id
+                    JOIN tickets t ON ta.ticket_id = t.ticket_id
                     WHERE ta.phenomenon_id = ?
+                      AND t.root_cause_id IS NOT NULL
                 """, (phenomenon.phenomenon_id,))
 
                 for row in cursor.fetchall():
-                    root_cause = row["root_cause"]
+                    root_cause_id = row["root_cause_id"]
                     ticket_id = row["ticket_id"]
 
-                    root_cause_map[root_cause]["phenomena"].append(phenomenon)
-                    root_cause_map[root_cause]["ticket_ids"].add(ticket_id)
+                    root_cause_map[root_cause_id]["phenomena"].append(phenomenon)
+                    root_cause_map[root_cause_id]["ticket_ids"].add(ticket_id)
 
             # 转换 set 为 list
             for root_cause in root_cause_map:
@@ -190,17 +190,19 @@ class PhenomenonHypothesisTracker:
 
     def _compute_confidence(
         self,
-        root_cause: str,
+        root_cause_id: str,
         supporting_phenomena: List[Phenomenon],
         confirmed_phenomena: List,
+        denied_phenomenon_ids: Set[str] = None,
     ) -> float:
         """
-        计算假设的置信度 (基于 confirmed_phenomena)
+        计算假设的置信度 (基于 confirmed_phenomena 和 denied_phenomena)
 
         Args:
-            root_cause: 根因
+            root_cause_id: 根因 ID
             supporting_phenomena: 支持该根因的现象
             confirmed_phenomena: 已确认现象
+            denied_phenomenon_ids: 已否定的现象 ID 集合
 
         Returns:
             置信度（0-1）
@@ -208,15 +210,20 @@ class PhenomenonHypothesisTracker:
         if not supporting_phenomena:
             return 0.0
 
+        denied_phenomenon_ids = denied_phenomenon_ids or set()
+
         # 1. 现象确认进度（权重 60%）
         # 改进：查询数据库找出该根因关联的所有现象，而不是只看 supporting_phenomena
         confirmed_ids = {p.phenomenon_id for p in confirmed_phenomena}
 
         # 查询该根因关联的所有现象 ID
-        related_phenomenon_ids = self._get_phenomena_for_root_cause(root_cause)
+        related_phenomenon_ids = self._get_phenomena_for_root_cause(root_cause_id)
 
         # 计算确认的现象中有多少与该根因相关
         confirmed_relevant_count = len(confirmed_ids & related_phenomenon_ids)
+
+        # 计算否定的现象中有多少与该根因相关
+        denied_relevant_count = len(denied_phenomenon_ids & related_phenomenon_ids)
 
         # 进度 = 确认的相关现象数 / 该根因的总现象数（至少1）
         total_for_root_cause = max(len(related_phenomenon_ids), 1)
@@ -234,14 +241,19 @@ class PhenomenonHypothesisTracker:
             + 0.2 * relevance_score
         )
 
+        # 4. 否定惩罚：每个被否定的相关现象降低 15% 置信度
+        if denied_relevant_count > 0:
+            denial_penalty = denied_relevant_count * 0.15
+            confidence = confidence * (1 - denial_penalty)
+
         return min(max(confidence, 0.0), 1.0)
 
-    def _get_phenomena_for_root_cause(self, root_cause: str) -> Set[str]:
+    def _get_phenomena_for_root_cause(self, root_cause_id: str) -> Set[str]:
         """
         获取与某个根因关联的所有现象 ID
 
         Args:
-            root_cause: 根因描述
+            root_cause_id: 根因 ID
 
         Returns:
             现象 ID 集合
@@ -253,9 +265,9 @@ class PhenomenonHypothesisTracker:
             cursor.execute("""
                 SELECT DISTINCT ta.phenomenon_id
                 FROM ticket_anomalies ta
-                JOIN raw_tickets rt ON ta.ticket_id = rt.ticket_id
-                WHERE rt.root_cause = ?
-            """, (root_cause,))
+                JOIN tickets t ON ta.ticket_id = t.ticket_id
+                WHERE t.root_cause_id = ?
+            """, (root_cause_id,))
 
             return {row[0] for row in cursor.fetchall()}
         finally:

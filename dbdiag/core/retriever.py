@@ -6,7 +6,7 @@ import sqlite3
 import json
 from typing import List, Optional, Set
 
-from dbdiag.models.phenomenon import Phenomenon
+from dbdiag.models import Phenomenon
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.vector_utils import deserialize_f32, cosine_similarity
 

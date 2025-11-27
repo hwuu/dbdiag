@@ -81,10 +81,10 @@ def init(db: str):
 )
 def import_data(data: str, db: str):
     """导入工单数据到数据库"""
-    from scripts.import_tickets import import_tickets
+    from scripts.import_tickets import import_tickets_v2
 
     try:
-        import_tickets(data, db)
+        import_tickets_v2(data, db)
         click.echo("\n[OK] 数据导入成功")
     except Exception as e:
         click.echo(f"\n[ERROR] 导入失败: {e}", err=True)
@@ -103,12 +103,11 @@ def import_data(data: str, db: str):
     help="配置文件路径（默认: config.yaml）",
 )
 def rebuild_index(db: str, config: str):
-    """重建向量索引（调用 Embedding API 生成向量）"""
-    from scripts.build_embeddings import build_embeddings
+    """重建向量索引（生成 phenomena、root_causes 和 ticket_anomalies）"""
+    from scripts.rebuild_index import rebuild_index as do_rebuild
 
     try:
-        build_embeddings(db, config)
-        click.echo("\n[OK] 向量索引重建成功")
+        do_rebuild(db, config)
     except Exception as e:
         click.echo(f"\n[ERROR] 重建失败: {e}", err=True)
         sys.exit(1)

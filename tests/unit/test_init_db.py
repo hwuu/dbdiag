@@ -37,13 +37,50 @@ class TestInitDatabase:
             assert "tickets" in tables
             assert "diagnostic_steps" in tables
             assert "sessions" in tables
-            assert "root_cause_patterns" in tables
+            assert "root_causes" in tables  # V2 重命名：root_cause_patterns → root_causes
 
             # V2 新增表
             assert "raw_tickets" in tables
             assert "raw_anomalies" in tables
             assert "phenomena" in tables
             assert "ticket_anomalies" in tables
+
+    def test_tickets_table_structure(self):
+        """测试:tickets 表结构（包含 root_cause_id）"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            init_database(db_path)
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(tickets)")
+            columns = {row[1]: row[2] for row in cursor.fetchall()}
+            conn.close()
+
+            assert "ticket_id" in columns
+            assert "root_cause_id" in columns  # V2 新增
+            assert "root_cause" in columns     # 保留兼容
+            assert "solution" in columns
+
+    def test_root_causes_table_structure(self):
+        """测试:root_causes 表结构"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            init_database(db_path)
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(root_causes)")
+            columns = {row[1]: row[2] for row in cursor.fetchall()}
+            conn.close()
+
+            assert "root_cause_id" in columns
+            assert "description" in columns
+            assert "solution" in columns
+            assert "key_phenomenon_ids" in columns
+            assert "related_ticket_ids" in columns
+            assert "ticket_count" in columns
+            assert "embedding" in columns
 
     def test_raw_tickets_table_structure(self):
         """测试:raw_tickets 表结构"""
