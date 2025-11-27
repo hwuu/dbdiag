@@ -150,7 +150,8 @@ solution: "执行 REINDEX INDEX CONCURRENTLY test_idx; 并配置定期 VACUUM"
 | **向量存储** | sqlite-vec 插件 | 集成在 SQLite 中，无需独立服务 |
 | **LLM** | API（配置化） | 支持 OpenAI API 兼容接口 |
 | **Embedding** | API（配置化） | 支持 OpenAI Embedding API 兼容接口 |
-| **前端 UI** | Gradio / Streamlit | 快速原型，可交互演示 |
+| **CLI** | Click | 命令行界面框架 |
+| **可视化** | pyvis | 知识图谱交互式 HTML 可视化 |
 | **会话存储** | SQLite 或 JSON 文件 | 简单持久化，无需 Redis |
 
 ### 3.3 配置管理
@@ -1568,6 +1569,163 @@ V2 优势体现:
   [2] Ticket T-002 (提供了 P-0003, P-0004 现象)
 ```
 
+### 7.5 CLI 交互演示示例
+
+以下是一个真实可运行的 CLI 交互示例（约 3-4 轮定位根因）：
+
+```
+$ python -m cli.main
+
+╔══════════════════════════════════════════════════════════════╗
+║          数据库问题诊断助手 (V2 - 现象级诊断)                ║
+╠══════════════════════════════════════════════════════════════╣
+║  输入问题描述开始诊断，支持以下命令：                        ║
+║    /help   - 查看帮助                                        ║
+║    /status - 查看当前诊断状态                                ║
+║    /reset  - 重置会话                                        ║
+║    /exit   - 退出程序                                        ║
+╚══════════════════════════════════════════════════════════════╝
+
+> 查询变慢，原来几秒现在要半分钟
+
+──────────────────────────────────────────────────
+[第 1 轮] 正在分析问题...
+  → 检索相关现象...
+  → 检索根因候选...
+  → 评估假设 (1/3): 索引膨胀导致 IO 瓶颈...
+  → 评估假设 (2/3): 频繁更新导致索引碎片化...
+  → 评估假设 (3/3): 统计信息过期导致执行...
+  → 生成推荐...
+
+建议确认以下 3 个现象
+
+  1. [P-0001] wait_io 事件占比异常高
+     推荐原因: 可能与「索引膨胀导致 IO 瓶颈」相关
+     观察方法:
+     SELECT wait_event_type, wait_event, count(*)
+     FROM pg_stat_activity WHERE state = 'active'
+     GROUP BY 1, 2 ORDER BY 3 DESC;
+
+  2. [P-0002] 索引大小异常增长
+     推荐原因: 可能与「索引膨胀导致 IO 瓶颈」相关
+     观察方法:
+     SELECT indexname, pg_size_pretty(pg_relation_size(indexrelid))
+     FROM pg_indexes ORDER BY pg_relation_size(indexrelid) DESC LIMIT 10;
+
+  3. [P-0047] 索引碎片率异常高
+     推荐原因: 可能与「频繁更新导致索引碎片化」相关
+     观察方法:
+     SELECT schemaname, relname, n_dead_tup, n_live_tup
+     FROM pg_stat_user_tables ORDER BY n_dead_tup DESC;
+
+请检查上述现象并反馈结果（如：1确认 2确认 3否定）
+
+──────────────────────────────────────────────────
+[Summary] 第 1 轮完成
+  已确认现象: 0
+  假设置信度:
+    1. [███░░░░░░░] 32% 索引膨胀导致 IO 瓶颈...
+    2. [██░░░░░░░░] 28% 频繁更新导致索引碎片化...
+    3. [██░░░░░░░░] 25% 统计信息过期导致执行...
+
+> 1确认 2确认 3否定
+
+──────────────────────────────────────────────────
+[第 2 轮] 正在处理反馈...
+  → 识别用户反馈...
+  → 更新假设置信度...
+  → 检索根因候选...
+  → 评估假设 (1/3): 索引膨胀导致 IO 瓶颈...
+  → 评估假设 (2/3): 频繁更新导致索引碎片化...
+  → 评估假设 (3/3): 统计信息过期导致执行...
+  → 生成推荐...
+
+建议确认以下 2 个现象
+
+  1. [P-0003] n_dead_tup 数量异常高，autovacuum 未及时清理
+     推荐原因: 可能与「索引膨胀导致 IO 瓶颈」相关
+     观察方法:
+     SELECT relname, n_dead_tup, last_autovacuum
+     FROM pg_stat_user_tables WHERE n_dead_tup > 10000;
+
+  2. [P-0048] 执行 REINDEX 后性能恢复
+     推荐原因: 可能与「索引膨胀导致 IO 瓶颈」相关
+     观察方法:
+     REINDEX INDEX CONCURRENTLY <index_name>;
+     -- 对比重建前后的查询时间
+
+请检查上述现象并反馈结果
+
+──────────────────────────────────────────────────
+[Summary] 第 2 轮完成
+  已确认现象: 2
+  假设置信度:
+    1. [██████░░░░] 58% 索引膨胀导致 IO 瓶颈...
+    2. [███░░░░░░░] 22% 频繁更新导致索引碎片化...
+    3. [██░░░░░░░░] 18% 统计信息过期导致执行...
+
+> 1确认 2确认
+
+──────────────────────────────────────────────────
+[第 3 轮] 正在处理反馈...
+  → 识别用户反馈...
+  → 更新假设置信度...
+  → 检索根因候选...
+  → 评估假设 (1/2): 索引膨胀导致 IO 瓶颈...
+  → 评估假设 (2/2): 频繁更新导致索引碎片化...
+  → 生成推荐...
+
+══════════════════════════════════════════════════
+  根因已定位：索引膨胀导致 IO 瓶颈
+  置信度: 82%
+══════════════════════════════════════════════════
+
+【诊断总结】
+
+**观察到的现象：**
+诊断过程中确认了以下关键现象：
+1. wait_io 事件占比异常高，表明存在 IO 等待问题
+2. 索引大小出现异常增长
+3. n_dead_tup 数量高，autovacuum 未及时清理死元组
+4. 执行 REINDEX 后查询性能明显恢复
+
+**推理链路：**
+高 IO 等待通常由磁盘读写瓶颈引起。结合索引异常增长和死元组
+堆积的现象，可以判断：频繁的数据更新产生了大量死元组，而
+autovacuum 未能及时清理，导致索引膨胀。膨胀的索引增加了
+B-tree 层级，每次查询需要更多的磁盘 IO，最终引发 IO 瓶颈。
+REINDEX 后性能恢复进一步验证了这一判断。
+
+**恢复措施：**
+1. 立即执行在线索引重建：
+   REINDEX INDEX CONCURRENTLY <index_name>;
+2. 调整 autovacuum 参数，加快死元组清理：
+   ALTER TABLE <table> SET (autovacuum_vacuum_scale_factor = 0.05);
+3. 建立索引大小监控告警，防止再次膨胀
+
+引用工单: [DB-001] [DB-018]
+
+──────────────────────────────────────────────────
+[Summary] 第 3 轮完成
+  已确认现象: 4
+  假设置信度:
+    1. [████████░░] 82% 索引膨胀导致 IO 瓶颈...
+    2. [██░░░░░░░░] 15% 频繁更新导致索引碎片化...
+
+诊断完成，再见！
+```
+
+**演示要点**：
+
+1. **第 1 轮**：用户描述问题 → 系统推荐 3 个现象（来自多个假设）
+2. **第 2 轮**：用户批量确认/否定 → 假设置信度更新，高置信度假设优先
+3. **第 3 轮**：置信度达到阈值 → 输出 LLM 生成的诊断总结
+
+**用户输入格式**：
+- `确认` / `是` / `看到了` - 确认所有待确认现象
+- `1确认 2否定 3确认` - 批量确认/否定
+- `全否定` / `都不是` - 否定所有待确认现象
+
 ---
 
 ## 八、实施计划
@@ -1576,88 +1734,85 @@ V2 优势体现:
 
 ```
 dbdiag/
-├── app/
+├── dbdiag/                       # 核心业务逻辑（领域层）
 │   ├── __init__.py
-│   ├── main.py                    # FastAPI 主服务
-│   ├── api/
+│   ├── __main__.py               # CLI 入口
+│   ├── api/                      # FastAPI 接口
 │   │   ├── __init__.py
-│   │   ├── chat.py                # 对话接口
-│   │   └── session.py             # 会话管理接口
-│   ├── core/
+│   │   ├── main.py               # FastAPI 主服务
+│   │   ├── chat.py               # 对话接口
+│   │   └── session.py            # 会话管理接口
+│   ├── core/                     # 核心逻辑
 │   │   ├── __init__.py
-│   │   ├── dialogue_manager.py    # 对话管理器
-│   │   ├── hypothesis_tracker.py  # 多假设追踪器
-│   │   ├── retriever.py           # 检索引擎
-│   │   ├── recommender.py         # 下一步推荐引擎
-│   │   └── response_generator.py  # 响应生成器
-│   ├── models/
+│   │   ├── dialogue_manager.py   # 对话管理器
+│   │   ├── hypothesis_tracker.py # 多假设追踪器
+│   │   ├── retriever.py          # 现象检索引擎
+│   │   ├── recommender.py        # 下一步推荐引擎
+│   │   └── response_generator.py # 响应生成器
+│   ├── models/                   # 数据模型
 │   │   ├── __init__.py
-│   │   ├── session.py             # 会话数据模型
-│   │   ├── ticket.py              # 工单数据模型
-│   │   └── phenomenon.py          # 现象数据模型
-│   ├── services/
+│   │   ├── session.py            # 会话数据模型
+│   │   ├── ticket.py             # 工单数据模型
+│   │   └── phenomenon.py         # 现象数据模型
+│   ├── services/                 # 服务层
 │   │   ├── __init__.py
-│   │   ├── llm_service.py         # LLM API 调用
-│   │   ├── embedding_service.py   # Embedding API 调用
-│   │   └── db_service.py          # 数据库操作
-│   └── utils/
+│   │   ├── llm_service.py        # LLM API 调用
+│   │   ├── embedding_service.py  # Embedding API 调用
+│   │   └── session_service.py    # 会话持久化
+│   └── utils/                    # 工具函数
 │       ├── __init__.py
-│       ├── config.py              # 配置加载
-│       └── vector_utils.py        # 向量计算工具
-├── data/
-│   └── example_tickets.json       # 示例工单数据（用于演示和测试）
-├── scripts/
-│   ├── import_tickets.py          # 数据导入脚本
-│   ├── build_embeddings.py        # 构建向量索引
-│   └── init_db.py                 # 初始化数据库
-├── ui/
-│   ├── gradio_app.py              # Gradio UI
-│   └── streamlit_app.py           # Streamlit UI（可选）
-├── tests/
+│       ├── config.py             # 配置加载
+│       └── vector_utils.py       # 向量计算工具
+├── cli/                          # 命令行界面（应用层）
 │   ├── __init__.py
-│   ├── test_retriever.py
-│   ├── test_hypothesis_tracker.py
-│   └── test_e2e.py                # 端到端测试
+│   ├── main.py                   # CLI 主程序
+│   └── formatter.py              # 输出格式化
+├── scripts/                      # 初始化脚本
+│   ├── init_db.py                # 初始化数据库
+│   ├── import_tickets.py         # 数据导入脚本
+│   ├── build_embeddings.py       # 构建向量索引
+│   └── visualize_knowledge_graph.py  # 知识图谱可视化
+├── tests/                        # 测试
+│   ├── unit/                     # 单元测试
+│   └── e2e/                      # 端到端测试
+├── data/                         # 数据存储（运行时生成）
+│   ├── tickets.db                # SQLite 数据库
+│   └── knowledge_graph.html      # 知识图谱可视化
 ├── docs/
-│   ├── design.md                  # 本设计文档
-│   └── api.md                     # API 文档
+│   └── design.md                 # 本设计文档
 ├── .gitignore
-├── config.yaml.example            # 配置示例
+├── config.yaml.example           # 配置示例
 ├── requirements.txt
-├── Dockerfile
 └── README.md
-
-注意：运行时生成的文件（如 data/tickets.db、data/sessions/ 等）不会提交到 git 中
 ```
 
 ### 8.2 开发阶段
 
-**Phase 1: 数据层与存储 (Week 1)**
-- [ ] 设计并实现 SQLite 数据库 schema
-- [ ] 实现数据导入脚本（YAML → SQLite）
-- [ ] 集成 sqlite-vec 插件
-- [ ] 调用 Embedding API 生成向量并存储
-- [ ] 构建全文检索索引
+**Phase 1: 数据层与存储**
+- [x] 设计并实现 SQLite 数据库 schema
+- [x] 实现数据导入脚本（JSON → SQLite）
+- [x] 调用 Embedding API 生成向量并存储
+- [x] 构建全文检索索引
 
-**Phase 2: 检索与推理核心 (Week 2)**
-- [ ] 实现步骤级检索算法
-- [ ] 实现多假设追踪器
-- [ ] 实现置信度计算逻辑
-- [ ] 实现下一步推荐引擎
-- [ ] 单元测试
+**Phase 2: 检索与推理核心**
+- [x] 实现现象级检索算法
+- [x] 实现多假设追踪器
+- [x] 实现置信度计算逻辑
+- [x] 实现下一步推荐引擎
+- [x] 单元测试
 
-**Phase 3: 对话管理与 API (Week 3)**
-- [ ] 实现会话状态管理
-- [ ] 实现对话管理器（状态机）
-- [ ] 实现响应生成器（含引用构建）
-- [ ] 开发 FastAPI 接口
-- [ ] 集成 LLM API（用于自然语言生成）
+**Phase 3: 对话管理与 API**
+- [x] 实现会话状态管理
+- [x] 实现对话管理器
+- [x] 实现响应生成器（含引用构建）
+- [x] 开发 FastAPI 接口
+- [x] 集成 LLM API（用于自然语言生成）
 
-**Phase 4: UI 与端到端测试 (Week 4)**
-- [ ] 开发 Gradio 交互界面
-- [ ] 准备演示数据集（20-30 个工单）
-- [ ] 端到端测试与调优
-- [ ] 编写部署文档
+**Phase 4: CLI 与端到端测试**
+- [x] 开发命令行交互界面
+- [x] 准备演示数据集（25 个工单）
+- [x] 端到端测试与调优
+- [x] 知识图谱可视化工具
 
 ---
 
