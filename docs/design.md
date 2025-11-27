@@ -1781,10 +1781,10 @@ dbdiag/
 │       ├── __init__.py
 │       ├── config.py             # 配置加载
 │       └── vector_utils.py       # 向量计算工具
-├── cli/                          # 命令行界面（应用层）
-│   ├── __init__.py
-│   ├── main.py                   # CLI 主程序
-│   └── formatter.py              # 输出格式化
+│   ├── cli/                      # 命令行界面
+│   │   ├── __init__.py
+│   │   ├── main.py               # CLI 主程序
+│   │   └── formatter.py          # 输出格式化
 ├── scripts/                      # 初始化脚本
 │   ├── init_db.py                # 初始化数据库
 │   ├── import_tickets.py         # 数据导入脚本

@@ -10,7 +10,7 @@ from unittest.mock import patch
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from cli.main import CLI
+from dbdiag.cli.main import CLI
 
 
 def test_cli_help_command():

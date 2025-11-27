@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from cli.formatter import TextFormatter
+from dbdiag.cli.formatter import TextFormatter
 from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
