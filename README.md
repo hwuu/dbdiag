@@ -5,11 +5,11 @@
 ## ✨ 特性
 
 - **多假设追踪**: 并行追踪 Top-3 根因假设，动态计算置信度
-- **步骤级检索**: 跨工单组合诊断步骤，应对新型问题
+- **现象级检索**: 跨工单组合诊断现象，应对新型问题
 - **智能推荐**: 三阶段决策逻辑（确认/鉴别/询问），自适应引导
 - **LLM 增强**: 自然语言生成诊断建议和解释
 - **引用溯源**: 引用历史工单，提供诊断依据
-- **多种界面**: CLI 命令行 / Web UI / REST API
+- **知识图谱可视化**: 生成交互式 HTML 可视化根因-工单-现象关系
 
 ## 🏗️ 架构
 
@@ -17,24 +17,27 @@
 dbdiag/
 ├── dbdiag/               # 核心业务逻辑（领域层）
 │   ├── core/               # 核心逻辑
-│   │   ├── retriever.py          # 步骤检索 (向量+关键词)
+│   │   ├── retriever.py          # 现象检索 (向量+关键词)
 │   │   ├── hypothesis_tracker.py # 多假设追踪
 │   │   ├── recommender.py        # 推荐引擎
 │   │   ├── response_generator.py # 响应生成
 │   │   └── dialogue_manager.py   # 对话管理
+│   ├── api/                # FastAPI 接口
+│   │   ├── main.py             # FastAPI 应用入口
+│   │   ├── chat.py             # 聊天 API
+│   │   └── session.py          # 会话 API
 │   ├── services/           # 服务层
 │   │   ├── session_service.py    # 会话持久化
 │   │   ├── embedding_service.py  # 向量化服务
 │   │   └── llm_service.py        # LLM 调用
 │   ├── models/             # 数据模型
 │   └── utils/              # 工具函数
-├── api/                  # FastAPI 接口（应用层）
 ├── cli/                  # 命令行界面（应用层）
-├── ui/                   # Gradio UI（应用层）
 ├── scripts/              # 初始化脚本
-│   ├── init_db.py          # 创建数据库
-│   ├── import_tickets.py   # 导入工单数据
-│   └── build_embeddings.py # 生成向量索引
+│   ├── init_db.py              # 创建数据库
+│   ├── import_tickets.py       # 导入工单数据
+│   ├── build_embeddings.py     # 生成向量索引
+│   └── visualize_knowledge_graph.py  # 知识图谱可视化
 ├── tests/                # 测试
 └── data/                 # 数据存储
 ```
@@ -104,15 +107,7 @@ python -m dbdiag rebuild-index
 python -m dbdiag cli
 ```
 
-#### 方式 2: Gradio UI
-
-```bash
-python -m dbdiag ui
-```
-
-访问: http://localhost:7860
-
-#### 方式 3: FastAPI 服务
+#### 方式 2: FastAPI 服务
 
 ```bash
 python -m dbdiag api
@@ -130,11 +125,10 @@ API 文档: http://localhost:8000/docs
 python -m dbdiag cli
 ```
 
-2. 输入问题描述（例如: "生产环境查询突然变慢"）
-3. 根据系统推荐执行诊断步骤
-4. 将执行结果反馈给系统
-5. 系统自动更新假设置信度，推荐下一步操作
-6. 重复 3-5 直到定位根因
+2. 输入问题描述（例如: "查询变慢"）
+3. 根据系统推荐确认现象（如: "1确认 2确认 3否定"）
+4. 系统自动更新假设置信度，推荐下一组现象
+5. 重复 3-4 直到定位根因
 
 **可用命令**:
 - `/help` - 显示帮助信息
@@ -143,14 +137,10 @@ python -m dbdiag cli
 - `/reset` - 重新开始新的诊断会话
 - `/exit` - 退出程序
 
-### Gradio UI
-
-1. 在问题描述框中输入数据库问题（例如: "生产环境查询突然变慢"）
-2. 点击"开始诊断"
-3. 根据系统推荐执行诊断步骤
-4. 将执行结果反馈给系统
-5. 系统自动更新假设置信度，推荐下一步操作
-6. 重复 3-5 直到定位根因
+**反馈格式**:
+- `确认` / `是` - 确认所有待确认现象
+- `1确认 2否定 3确认` - 批量确认/否定
+- `全否定` / `都不是` - 否定所有待确认现象
 
 ### FastAPI
 
@@ -162,16 +152,6 @@ curl -X POST http://localhost:8000/api/chat/start \
   -d '{"user_problem": "数据库查询变慢"}'
 ```
 
-响应:
-
-```json
-{
-  "session_id": "sess_20250125_123456_abc123",
-  "message": "建议执行以下诊断步骤...",
-  "action": "recommend_step"
-}
-```
-
 #### 继续对话
 
 ```bash
@@ -179,8 +159,21 @@ curl -X POST http://localhost:8000/api/chat/continue \
   -H "Content-Type: application/json" \
   -d '{
     "session_id": "sess_20250125_123456_abc123",
-    "user_message": "检查发现 CPU 使用率 95%"
+    "user_message": "确认"
   }'
+```
+
+### 知识图谱可视化
+
+```bash
+# 默认力导向布局
+python -m dbdiag visualize
+
+# 分层布局（根因 → 工单 → 现象）
+python -m dbdiag visualize --layout hierarchical
+
+# 生成后自动打开浏览器
+python -m dbdiag visualize --layout tree --open
 ```
 
 ## 🧪 测试
@@ -191,40 +184,10 @@ curl -X POST http://localhost:8000/api/chat/continue \
 python -m pytest tests/ -v
 ```
 
-运行端到端测试:
-
-```bash
-python -m pytest tests/test_e2e_diagnosis.py -v
-```
-
 运行单元测试:
 
 ```bash
-python -m pytest tests/test_vector_utils.py -v
-```
-
-## 📊 数据格式
-
-### 工单数据 (JSON)
-
-```json
-{
-  "tickets": [
-    {
-      "ticket_id": "DB-001",
-      "title": "查询性能下降",
-      "problem_description": "SELECT 查询从 5 秒增加到 30 秒",
-      "root_cause": "缺少索引",
-      "diagnostic_steps": [
-        {
-          "observed_fact": "pg_stat_statements 显示某个查询的 mean_exec_time 为 50 秒",
-          "observation_method": "SELECT query, mean_exec_time FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;",
-          "analysis_result": "定位到慢查询，需要分析执行计划"
-        }
-      ]
-    }
-  ]
-}
+python -m pytest tests/unit/ -v
 ```
 
 ## 🔧 命令行工具
@@ -248,24 +211,10 @@ python -m dbdiag cli
 # 启动 FastAPI 服务
 python -m dbdiag api --host 0.0.0.0 --port 8000
 
-# 启动 Gradio UI
-python -m dbdiag ui --port 7860 --share
+# 生成知识图谱可视化
+python -m dbdiag visualize --layout hierarchical --open
 ```
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request!
 
 ## 📄 许可
 
 MIT License
-
-## 🙏 致谢
-
-本项目基于以下技术:
-
-- [FastAPI](https://fastapi.tiangolo.com/) - Web 框架
-- [Gradio](https://gradio.app/) - UI 框架
-- [OpenAI API](https://openai.com/api/) - LLM 和 Embedding
-- [SQLite](https://www.sqlite.org/) - 数据存储
-- [Pydantic](https://pydantic.dev/) - 数据验证

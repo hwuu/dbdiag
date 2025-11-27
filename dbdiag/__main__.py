@@ -3,10 +3,10 @@
 使用方式：
     python -m dbdiag cli            # 启动交互式 CLI 诊断
     python -m dbdiag api            # 启动 FastAPI 服务
-    python -m dbdiag ui             # 启动 Gradio UI
     python -m dbdiag init           # 初始化数据库
     python -m dbdiag import         # 导入工单数据
     python -m dbdiag rebuild-index  # 重建向量索引
+    python -m dbdiag visualize      # 生成知识图谱可视化
 """
 import sys
 from pathlib import Path
@@ -42,31 +42,11 @@ def interactive_cli():
 def serve(host: str, port: int):
     """启动 FastAPI 服务"""
     import uvicorn
-    from api.main import app
+    from dbdiag.api.main import app
 
     click.echo(f"正在启动服务: http://{host}:{port}")
     click.echo(f"API 文档: http://{host}:{port}/docs")
     uvicorn.run(app, host=host, port=port)
-
-
-@main.command("ui")
-@click.option(
-    "--share",
-    is_flag=True,
-    help="创建公共分享链接",
-)
-@click.option(
-    "--port",
-    default=7860,
-    type=int,
-    help="服务监听端口",
-)
-def ui_launch(share: bool, port: int):
-    """启动 Gradio UI"""
-    from ui.main import launch
-
-    click.echo(f"正在启动 Gradio UI: http://127.0.0.1:{port}")
-    launch(share=share, server_port=port)
 
 
 @main.command()
@@ -131,6 +111,50 @@ def rebuild_index(db: str, config: str):
         click.echo("\n[OK] 向量索引重建成功")
     except Exception as e:
         click.echo(f"\n[ERROR] 重建失败: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("visualize")
+@click.option(
+    "--db",
+    default="data/tickets.db",
+    help="数据库文件路径（默认: data/tickets.db）",
+)
+@click.option(
+    "--output", "-o",
+    default="data/knowledge_graph.html",
+    help="输出文件路径（默认: data/knowledge_graph.html）",
+)
+@click.option(
+    "--layout", "-l",
+    type=click.Choice(["force", "hierarchical", "tree", "radial"]),
+    default="force",
+    help="布局模式: force(力导向), hierarchical(分层), tree(树状), radial(径向)",
+)
+@click.option(
+    "--open",
+    "open_browser",
+    is_flag=True,
+    help="生成后自动在浏览器中打开",
+)
+def visualize(db: str, output: str, layout: str, open_browser: bool):
+    """生成知识图谱可视化（HTML 格式）"""
+    from scripts.visualize_knowledge_graph import create_knowledge_graph
+    import webbrowser
+
+    db_path = Path(db)
+    if not db_path.exists():
+        click.echo(f"[ERROR] 数据库文件不存在: {db}", err=True)
+        sys.exit(1)
+
+    try:
+        create_knowledge_graph(str(db_path), output, layout)
+        click.echo(f"\n[OK] 知识图谱已生成: {output}")
+
+        if open_browser:
+            webbrowser.open(f"file://{Path(output).absolute()}")
+    except Exception as e:
+        click.echo(f"\n[ERROR] 生成失败: {e}", err=True)
         sys.exit(1)
 
 

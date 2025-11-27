@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
 
-from dbdiag.core.dialogue_manager import DialogueManager
+from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -15,9 +15,9 @@ config = load_config()
 llm_service = LLMService(config)
 embedding_service = EmbeddingService(config)
 
-# 初始化对话管理器
+# 初始化对话管理器 (V2)
 db_path = str(Path("data") / "tickets.db")
-dialogue_manager = DialogueManager(db_path, llm_service, embedding_service)
+dialogue_manager = PhenomenonDialogueManager(db_path, llm_service, embedding_service)
 
 
 @router.get("/sessions")
