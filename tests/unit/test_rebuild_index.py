@@ -265,6 +265,98 @@ class TestRebuildIndex:
                     # 数量应该相同（不是累加）
                     assert first_count == second_count
 
+    def test_rebuild_index_creates_root_causes(self):
+        """测试:rebuild_index 应创建 root_causes 记录"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path, _ = self._setup_test_db(tmpdir)
+
+            mock_embeddings = [[0.1] * 3] * 4
+
+            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                mock_embedding_instance = Mock()
+                mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                MockEmbedding.return_value = mock_embedding_instance
+
+                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                    mock_llm_instance = Mock()
+                    mock_llm_instance.generate_simple.return_value = "标准化描述"
+                    MockLLM.return_value = mock_llm_instance
+
+                    from scripts.rebuild_index import rebuild_index
+                    rebuild_index(db_path, similarity_threshold=0.95)
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # 测试数据有 3 个不同的 root_cause，应该生成 3 个 root_causes 记录
+            cursor.execute("SELECT COUNT(*) FROM root_causes")
+            count = cursor.fetchone()[0]
+            assert count == 3
+
+            # 验证 root_causes 内容
+            cursor.execute("SELECT root_cause_id, description, ticket_count FROM root_causes ORDER BY root_cause_id")
+            rows = cursor.fetchall()
+            assert len(rows) == 3
+            # 每个 root_cause 都应该有对应的 description
+            for row in rows:
+                assert row["root_cause_id"].startswith("RC-")
+                assert row["description"] is not None
+                assert row["ticket_count"] >= 1
+
+            conn.close()
+
+    def test_rebuild_index_sets_tickets_root_cause_id(self):
+        """测试:rebuild_index 应为 tickets 设置 root_cause_id"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path, _ = self._setup_test_db(tmpdir)
+
+            mock_embeddings = [[0.1] * 3] * 4
+
+            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                mock_embedding_instance = Mock()
+                mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                MockEmbedding.return_value = mock_embedding_instance
+
+                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                    mock_llm_instance = Mock()
+                    mock_llm_instance.generate_simple.return_value = "标准化描述"
+                    MockLLM.return_value = mock_llm_instance
+
+                    from scripts.rebuild_index import rebuild_index
+                    rebuild_index(db_path, similarity_threshold=0.95)
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # 验证 tickets 表有 root_cause_id
+            cursor.execute("SELECT ticket_id, root_cause_id, root_cause FROM tickets")
+            rows = cursor.fetchall()
+            assert len(rows) == 3
+
+            for row in rows:
+                # root_cause_id 应该存在且格式正确
+                assert row["root_cause_id"] is not None
+                assert row["root_cause_id"].startswith("RC-")
+                # root_cause 文本也应该保留
+                assert row["root_cause"] is not None
+
+            # 验证 root_cause_id 正确关联到 root_causes 表
+            cursor.execute("""
+                SELECT t.ticket_id, t.root_cause, rc.description
+                FROM tickets t
+                JOIN root_causes rc ON t.root_cause_id = rc.root_cause_id
+            """)
+            joined_rows = cursor.fetchall()
+            assert len(joined_rows) == 3
+
+            for row in joined_rows:
+                # root_cause 文本应该与 root_causes.description 一致
+                assert row["root_cause"] == row["description"]
+
+            conn.close()
+
 
 class TestClusterBySimilarity:
     """聚类算法测试"""

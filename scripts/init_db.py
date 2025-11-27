@@ -108,9 +108,11 @@ CREATE TABLE IF NOT EXISTS tickets (
     ticket_id TEXT PRIMARY KEY,
     metadata_json TEXT NOT NULL,      -- JSON: {"db_type": "...", "version": "...", "module": "...", "severity": "..."}
     description TEXT NOT NULL,        -- 问题描述
-    root_cause TEXT NOT NULL,         -- 根因
+    root_cause_id TEXT,               -- 关联根因 ID（V2 新增）
+    root_cause TEXT NOT NULL,         -- 根因描述（保留兼容）
     solution TEXT NOT NULL,           -- 解决方案
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (root_cause_id) REFERENCES root_causes(root_cause_id)
 );
 
 -- 诊断步骤表（V1，DEPRECATED - 请使用 phenomena 表）
@@ -169,15 +171,14 @@ END;
 -- 共享表
 -- ============================================
 
--- 根因模式表
-CREATE TABLE IF NOT EXISTS root_cause_patterns (
-    pattern_id TEXT PRIMARY KEY,
-    root_cause TEXT NOT NULL,              -- 根因描述
-    key_symptoms TEXT NOT NULL,            -- 关键症状列表（JSON 数组）
-    related_step_ids TEXT NOT NULL,        -- V1: 相关步骤 ID 列表（JSON 数组）
-    key_phenomenon_ids TEXT,               -- V2: 关键现象 ID 列表（JSON 数组）
-    related_ticket_ids TEXT,               -- V2: 相关工单 ID 列表（JSON 数组）
-    ticket_count INTEGER NOT NULL,         -- 支持该根因的工单数量
+-- 根因表（V2 重构：从 root_cause_patterns 改名）
+CREATE TABLE IF NOT EXISTS root_causes (
+    root_cause_id TEXT PRIMARY KEY,        -- 格式: RC-{序号}，如 RC-0001
+    description TEXT NOT NULL,             -- 根因描述
+    solution TEXT,                         -- 典型解决方案（聚合自工单）
+    key_phenomenon_ids TEXT,               -- 关键现象 ID 列表（JSON 数组）
+    related_ticket_ids TEXT,               -- 相关工单 ID 列表（JSON 数组）
+    ticket_count INTEGER NOT NULL DEFAULT 0, -- 支持该根因的工单数量
     embedding BLOB                         -- 根因的向量表示
 );
 

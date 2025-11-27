@@ -41,7 +41,7 @@ def test_slow_query_diagnosis_flow(dialogue_manager):
     session_state = dialogue_manager.session_service.get_session(session_id)
     print(f"当前假设数: {len(session_state.active_hypotheses)}")
     for i, hyp in enumerate(session_state.active_hypotheses[:3], 1):
-        print(f"  假设{i}: {hyp.root_cause[:50]}... (置信度: {hyp.confidence:.2f})")
+        print(f"  假设{i}: {hyp.root_cause_id[:50]}... (置信度: {hyp.confidence:.2f})")
 
     # 验证第一轮响应
     assert "session_id" in response1
@@ -58,7 +58,7 @@ def test_slow_query_diagnosis_flow(dialogue_manager):
     session_state = dialogue_manager.session_service.get_session(session_id)
     print(f"当前假设数: {len(session_state.active_hypotheses)}")
     for i, hyp in enumerate(session_state.active_hypotheses[:3], 1):
-        print(f"  假设{i}: {hyp.root_cause[:50]}... (置信度: {hyp.confidence:.2f})")
+        print(f"  假设{i}: {hyp.root_cause_id[:50]}... (置信度: {hyp.confidence:.2f})")
 
     # 验证第二轮响应
     assert "message" in response2
@@ -93,7 +93,7 @@ def test_slow_query_diagnosis_flow(dialogue_manager):
         session_state = dialogue_manager.session_service.get_session(session_id)
         print(f"\n当前假设数: {len(session_state.active_hypotheses)}")
         for i, hyp in enumerate(session_state.active_hypotheses[:3], 1):
-            print(f"  假设{i}: {hyp.root_cause[:50]}... (置信度: {hyp.confidence:.2f})")
+            print(f"  假设{i}: {hyp.root_cause_id[:50]}... (置信度: {hyp.confidence:.2f})")
 
         # 检查是否已确认根因
         if response.get("action") == "confirm_root_cause":

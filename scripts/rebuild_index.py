@@ -150,8 +150,13 @@ def rebuild_index(
                 anomaly["id"],
             ))
 
-        # 同步到 V1 tickets 表（兼容）
-        _sync_to_v1_tickets(cursor)
+        # 构建 root_causes 表
+        print("\n[6.5/7] 构建 root_causes 表...")
+        root_cause_map = _build_root_causes(cursor)
+        print(f"  生成了 {len(root_cause_map)} 个根因")
+
+        # 同步到 tickets 表（包含 root_cause_id）
+        _sync_to_tickets(cursor, root_cause_map)
 
         conn.commit()
 
@@ -160,10 +165,16 @@ def rebuild_index(
         phenomena_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM ticket_anomalies")
         ticket_anomalies_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM root_causes")
+        root_causes_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM tickets")
+        tickets_count = cursor.fetchone()[0]
 
         print(f"\n[OK] 索引重建完成")
         print(f"  phenomena: {phenomena_count}")
         print(f"  ticket_anomalies: {ticket_anomalies_count}")
+        print(f"  root_causes: {root_causes_count}")
+        print(f"  tickets: {tickets_count}")
 
     except Exception as e:
         print(f"\n[ERROR] 索引重建失败: {e}")
@@ -286,17 +297,104 @@ def _generate_phenomenon(
     }
 
 
-def _sync_to_v1_tickets(cursor: sqlite3.Cursor) -> None:
+def _build_root_causes(cursor: sqlite3.Cursor) -> Dict[str, str]:
     """
-    同步数据到 V1 tickets 表（兼容旧代码）
+    从 raw_tickets 提取唯一根因，生成 root_causes 表
 
-    从 raw_tickets 复制到 tickets 表
+    Returns:
+        根因文本到 root_cause_id 的映射
     """
+    # 1. 提取唯一根因及其统计信息
     cursor.execute("""
-        INSERT OR REPLACE INTO tickets (ticket_id, metadata_json, description, root_cause, solution)
-        SELECT ticket_id, COALESCE(metadata_json, '{}'), description, root_cause, solution
+        SELECT
+            root_cause,
+            GROUP_CONCAT(ticket_id) as ticket_ids,
+            COUNT(*) as ticket_count,
+            MAX(solution) as solution
+        FROM raw_tickets
+        GROUP BY root_cause
+        ORDER BY ticket_count DESC
+    """)
+
+    root_cause_rows = cursor.fetchall()
+    root_cause_map = {}  # root_cause_text -> root_cause_id
+
+    # 2. 清除旧数据
+    cursor.execute("DELETE FROM root_causes")
+
+    # 3. 生成 root_causes 记录
+    for idx, row in enumerate(root_cause_rows):
+        root_cause_text = row[0]
+        ticket_ids = row[1].split(",") if row[1] else []
+        ticket_count = row[2]
+        solution = row[3] or ""
+
+        root_cause_id = f"RC-{idx + 1:04d}"
+        root_cause_map[root_cause_text] = root_cause_id
+
+        # 查找该根因关联的现象 ID
+        cursor.execute("""
+            SELECT DISTINCT ta.phenomenon_id
+            FROM ticket_anomalies ta
+            WHERE ta.ticket_id IN (
+                SELECT ticket_id FROM raw_tickets WHERE root_cause = ?
+            )
+        """, (root_cause_text,))
+        phenomenon_ids = [r[0] for r in cursor.fetchall()]
+
+        cursor.execute("""
+            INSERT INTO root_causes (
+                root_cause_id, description, solution,
+                key_phenomenon_ids, related_ticket_ids, ticket_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            root_cause_id,
+            root_cause_text,
+            solution,
+            json.dumps(phenomenon_ids),
+            json.dumps(ticket_ids),
+            ticket_count,
+        ))
+
+    return root_cause_map
+
+
+def _sync_to_tickets(cursor: sqlite3.Cursor, root_cause_map: Dict[str, str]) -> None:
+    """
+    同步数据到 tickets 表，包含 root_cause_id 外键
+
+    Args:
+        cursor: 数据库游标
+        root_cause_map: 根因文本到 root_cause_id 的映射
+    """
+    # 先清空 tickets 表
+    cursor.execute("DELETE FROM tickets")
+
+    # 从 raw_tickets 读取数据并写入 tickets
+    cursor.execute("""
+        SELECT ticket_id, metadata_json, description, root_cause, solution
         FROM raw_tickets
     """)
+
+    for row in cursor.fetchall():
+        ticket_id, metadata_json, description, root_cause_text, solution = row
+        root_cause_id = root_cause_map.get(root_cause_text)
+
+        cursor.execute("""
+            INSERT INTO tickets (
+                ticket_id, metadata_json, description,
+                root_cause_id, root_cause, solution
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            ticket_id,
+            metadata_json or "{}",
+            description,
+            root_cause_id,
+            root_cause_text,
+            solution,
+        ))
 
 
 if __name__ == "__main__":

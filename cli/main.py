@@ -5,6 +5,7 @@
 V2 架构：使用 PhenomenonDialogueManager 进行现象级诊断。
 """
 import sys
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -24,7 +25,7 @@ class CLI:
         self.config = load_config()
 
         # 数据库路径
-        db_path = str(Path("data") / "tickets.db")
+        self.db_path = str(Path("data") / "tickets.db")
 
         # 初始化单例服务
         self.llm_service = LLMService(self.config)
@@ -32,7 +33,7 @@ class CLI:
 
         # 初始化对话管理器 (V2)，传入进度回调
         self.dialogue_manager = PhenomenonDialogueManager(
-            db_path, self.llm_service, self.embedding_service,
+            self.db_path, self.llm_service, self.embedding_service,
             progress_callback=self._print_progress
         )
 
@@ -48,6 +49,20 @@ class CLI:
     def _print_progress(self, message: str):
         """打印进度信息（实时显示）"""
         print(f"  → {message}", flush=True)
+
+    def _get_root_cause_description(self, root_cause_id: str) -> str:
+        """根据 ID 获取根因描述"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT description FROM root_causes WHERE root_cause_id = ?",
+                (root_cause_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else root_cause_id
+        finally:
+            conn.close()
 
     def run(self):
         """运行 CLI 主循环"""
@@ -210,7 +225,8 @@ class CLI:
             print("  假设置信度:")
             for i, hyp in enumerate(session.active_hypotheses[:3], 1):
                 conf_bar = "█" * int(hyp.confidence * 10) + "░" * (10 - int(hyp.confidence * 10))
-                print(f"    {i}. [{conf_bar}] {hyp.confidence:.0%} {hyp.root_cause[:30]}...")
+                desc = self._get_root_cause_description(hyp.root_cause_id)
+                print(f"    {i}. [{conf_bar}] {hyp.confidence:.0%} {desc[:30]}...")
         print()
 
     def _show_history(self):

@@ -265,13 +265,13 @@ CREATE TABLE phenomena (
 ```sql
 CREATE TABLE tickets (
     ticket_id TEXT PRIMARY KEY,
-    raw_ticket_id TEXT,                    -- 关联原始工单
     metadata_json TEXT,
     description TEXT,
-    root_cause TEXT,
+    root_cause_id TEXT,                    -- 关联根因（外键）
+    root_cause TEXT,                       -- 根因描述（冗余，便于查询）
     solution TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (raw_ticket_id) REFERENCES raw_tickets(ticket_id)
+    FOREIGN KEY (root_cause_id) REFERENCES root_causes(root_cause_id)
 );
 ```
 
@@ -294,20 +294,26 @@ CREATE TABLE ticket_anomalies (
 - 同一 phenomenon 在不同工单中可能有不同的 `why_relevant`
 - 例如：P-0001（wait_io 高）在索引膨胀工单和磁盘故障工单中相关性解释不同
 
-#### 4.3.4 根因模式表 (root_cause_patterns)
+#### 4.3.4 根因表 (root_causes)
 
-预聚合的根因模式，用于快速匹配和假设生成：
+存储聚合后的根因信息，由 `rebuild-index` 从 `raw_tickets` 生成：
 
 ```sql
-CREATE TABLE root_cause_patterns (
-    pattern_id TEXT PRIMARY KEY,
-    root_cause TEXT,                       -- 根因描述
+CREATE TABLE root_causes (
+    root_cause_id TEXT PRIMARY KEY,        -- 格式: RC-{序号}，如 RC-0001
+    description TEXT NOT NULL,             -- 根因描述文本
+    solution TEXT,                         -- 通用解决方案
     key_phenomenon_ids TEXT,               -- 关键现象 ID 列表（JSON 数组）
     related_ticket_ids TEXT,               -- 相关工单 ID 列表（JSON 数组）
-    ticket_count INTEGER,                  -- 支持该根因的工单数量
-    embedding BLOB                         -- 根因的向量表示
+    ticket_count INTEGER NOT NULL DEFAULT 0, -- 支持该根因的工单数量
+    embedding BLOB                         -- 根因的向量表示（可选）
 );
 ```
+
+**设计说明**：
+- 每个唯一的 `root_cause` 文本生成一个 `root_cause_id`
+- `tickets.root_cause_id` 是指向此表的外键
+- 运行时代码通过 `root_cause_id` 关联，不再直接访问 `raw_tickets`
 
 #### 4.3.5 会话表 (sessions)
 
@@ -711,9 +717,9 @@ def update_hypotheses(session, new_facts):
 
 ```python
 def compute_confidence(root_cause_pattern, supporting_phenomena,
-                      confirmed_facts, confirmed_phenomena):
+                      confirmed_facts, confirmed_phenomena, denied_phenomenon_ids):
     """
-    多因素加权计算置信度
+    多因素加权计算置信度（2025-11-27 更新：增加否定惩罚）
     """
     # 1. 事实匹配度（权重 50%）- 使用 LLM 智能评估
     fact_score = evaluate_facts_for_hypothesis(
@@ -741,7 +747,14 @@ def compute_confidence(root_cause_pattern, supporting_phenomena,
         0.1 * desc_similarity
     )
 
-    return confidence
+    # 5. 否定惩罚：每个被否定的相关现象降低 15% 置信度（2025-11-27 新增）
+    related_phenomenon_ids = get_phenomena_for_root_cause(root_cause_pattern.root_cause_id)
+    denied_relevant_count = len(denied_phenomenon_ids & related_phenomenon_ids)
+    if denied_relevant_count > 0:
+        denial_penalty = denied_relevant_count * 0.15
+        confidence = confidence * (1 - denial_penalty)
+
+    return min(max(confidence, 0.0), 1.0)
 
 
 def evaluate_facts_for_hypothesis(root_cause, supporting_phenomena, confirmed_facts):
@@ -791,6 +804,11 @@ def evaluate_facts_for_hypothesis(root_cause, supporting_phenomena, confirmed_fa
 - ✅ 使用 LLM 智能评估事实对假设的支持/反对程度
 - ✅ 负面事实（如"IO 正常"）能有效降低相关假设的置信度
 - ✅ 避免了简单关键词匹配的局限性
+
+**关键改进**（2025-11-27）：
+- ✅ 增加否定现象惩罚机制：每个被否定的相关现象降低 15% 置信度
+- ✅ 修复 `recommended_phenomenon_ids` 和 `denied_phenomenon_ids` 属性问题（property → 实际列表操作）
+- ✅ 正确使用 `RecommendedPhenomenon` 和 `DeniedPhenomenon` 模型记录状态
 
 ### 5.3 下一步推荐引擎
 
@@ -1770,7 +1788,7 @@ dbdiag/
 ├── scripts/                      # 初始化脚本
 │   ├── init_db.py                # 初始化数据库
 │   ├── import_tickets.py         # 数据导入脚本
-│   ├── build_embeddings.py       # 构建向量索引
+│   ├── rebuild_index.py          # 重建索引（phenomena、root_causes）
 │   └── visualize_knowledge_graph.py  # 知识图谱可视化
 ├── tests/                        # 测试
 │   ├── unit/                     # 单元测试
@@ -2196,7 +2214,9 @@ class SessionState(BaseModel):
 
 
 class Hypothesis(BaseModel):
-    # ... V1 字段 ...
+    root_cause_id: str                                        # 根因 ID（外键关联 root_causes）
+    confidence: float                                          # 置信度 0-1
+    missing_phenomena: List[str] = []                          # 缺失的关键现象描述
 
     # V2 新增字段
     supporting_phenomenon_ids: List[str] = []            # 支持该假设的现象
@@ -2206,14 +2226,17 @@ class Hypothesis(BaseModel):
 
 ### 14.5 数据表使用
 
-V2 组件使用以下数据表：
+V2 组件在运行时使用以下数据表（不直接访问 `raw_*` 表）：
 
 | 表名 | 用途 |
 |------|------|
 | `phenomena` | 标准现象库，V2 检索的主表 |
-| `ticket_anomalies` | 现象与工单的关联，用于获取 root_cause |
-| `raw_tickets` | 获取工单的 root_cause 和 solution |
+| `ticket_anomalies` | 现象与工单的关联，用于获取 root_cause_id |
+| `tickets` | 处理后的工单信息，包含 root_cause_id 外键 |
+| `root_causes` | 根因信息表，包含描述和解决方案 |
 | `sessions` | 会话状态持久化（支持 V2 字段） |
+
+**说明**：`raw_tickets` 和 `raw_anomalies` 仅在 `rebuild-index` 阶段使用，运行时代码通过 `tickets` + `root_causes` 获取数据。
 
 ### 14.6 单元测试覆盖
 

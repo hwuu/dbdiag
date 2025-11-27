@@ -8,10 +8,10 @@ import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from dbdiag.models.session import (
-    SessionState, ConfirmedPhenomenon, DialogueMessage
+from dbdiag.models import (
+    SessionState, ConfirmedPhenomenon, DialogueMessage, Phenomenon,
+    RecommendedPhenomenon, DeniedPhenomenon
 )
-from dbdiag.models.phenomenon import Phenomenon
 from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
 from dbdiag.core.recommender import PhenomenonRecommendationEngine
 from dbdiag.core.response_generator import ResponseGenerator
@@ -94,9 +94,15 @@ class PhenomenonDialogueManager:
             phenomena = response.get("phenomena", [])
             if not phenomena and response.get("phenomenon"):
                 phenomena = [response["phenomenon"]]
+            round_number = len(session.dialogue_history) // 2 + 1
             for p in phenomena:
                 if p.phenomenon_id not in session.recommended_phenomenon_ids:
-                    session.recommended_phenomenon_ids.append(p.phenomenon_id)
+                    session.recommended_phenomena.append(
+                        RecommendedPhenomenon(
+                            phenomenon_id=p.phenomenon_id,
+                            round_number=round_number
+                        )
+                    )
 
         # 添加助手响应到历史
         session.dialogue_history.append(
@@ -156,9 +162,15 @@ class PhenomenonDialogueManager:
             phenomena = response.get("phenomena", [])
             if not phenomena and response.get("phenomenon"):
                 phenomena = [response["phenomenon"]]
+            round_number = len(session.dialogue_history) // 2 + 1
             for p in phenomena:
                 if p.phenomenon_id not in session.recommended_phenomenon_ids:
-                    session.recommended_phenomenon_ids.append(p.phenomenon_id)
+                    session.recommended_phenomena.append(
+                        RecommendedPhenomenon(
+                            phenomenon_id=p.phenomenon_id,
+                            round_number=round_number
+                        )
+                    )
 
         # 添加助手响应到历史
         session.dialogue_history.append(
@@ -240,7 +252,9 @@ class PhenomenonDialogueManager:
         if any(kw in user_message for kw in simple_deny_keywords):
             for phenomenon_id in pending_phenomenon_ids:
                 if phenomenon_id not in session.denied_phenomenon_ids:
-                    session.denied_phenomenon_ids.append(phenomenon_id)
+                    session.denied_phenomena.append(
+                        DeniedPhenomenon(phenomenon_id=phenomenon_id)
+                    )
             return
 
         # 尝试解析批量确认格式：如 "1确认 2否定 3确认"
@@ -262,7 +276,9 @@ class PhenomenonDialogueManager:
                         )
                     elif action in ["否定", "否", "异常", "没有", "不是"]:
                         if phenomenon_id not in session.denied_phenomenon_ids:
-                            session.denied_phenomenon_ids.append(phenomenon_id)
+                            session.denied_phenomena.append(
+                                DeniedPhenomenon(phenomenon_id=phenomenon_id)
+                            )
             return
 
         # 简单确认关键词 -> 确认所有待确认的现象

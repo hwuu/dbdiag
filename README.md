@@ -36,7 +36,7 @@ dbdiag/
 ├── scripts/              # 初始化脚本
 │   ├── init_db.py              # 创建数据库
 │   ├── import_tickets.py       # 导入工单数据
-│   ├── build_embeddings.py     # 生成向量索引
+│   ├── rebuild_index.py         # 重建索引（phenomena、root_causes）
 │   └── visualize_knowledge_graph.py  # 知识图谱可视化
 ├── tests/                # 测试
 └── data/                 # 数据存储
