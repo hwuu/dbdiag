@@ -118,9 +118,9 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # 创建网络图
+    # 创建网络图（占满整个视口）
     net = Network(
-        height="900px",
+        height="100vh",
         width="100%",
         bgcolor="#ffffff",
         font_color="#333333",
@@ -225,6 +225,36 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
 
     # 生成 HTML
     net.save_graph(output_path)
+
+    # 后处理：让图表真正占满整个屏幕
+    with open(output_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    # 添加全屏样式，移除默认边距和边框
+    fullscreen_style = """
+        <style>
+            html, body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                height: 100%;
+                width: 100%;
+            }
+            center { display: none; }
+            #mynetwork {
+                border: none !important;
+                position: absolute !important;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+            }
+        </style>
+    """
+    html_content = html_content.replace("<head>", f"<head>{fullscreen_style}")
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
     # 统计信息
     print(f"知识图谱已生成: {output_path}")
