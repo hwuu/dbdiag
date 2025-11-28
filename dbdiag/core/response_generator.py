@@ -192,7 +192,15 @@ class ResponseGenerator:
 
         try:
             summary = self.llm_service.generate_simple(prompt)
-            return summary.strip()
+            # 清理 LLM 可能返回的 markdown 代码块标记
+            summary = summary.strip()
+            if summary.startswith("```markdown"):
+                summary = summary[len("```markdown"):].strip()
+            elif summary.startswith("```"):
+                summary = summary[3:].strip()
+            if summary.endswith("```"):
+                summary = summary[:-3].strip()
+            return summary
         except Exception as e:
             # 降级：返回简单模板
             return f"""**观察到的现象：**

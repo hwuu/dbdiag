@@ -6,7 +6,7 @@ from typing import Optional, List, Dict
 from collections import defaultdict
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
-from dbdiag.dao import PhenomenonDAO, RootCauseDAO
+from dbdiag.dao import PhenomenonDAO, RootCauseDAO, TicketAnomalyDAO
 from dbdiag.services.llm_service import LLMService
 
 
@@ -28,6 +28,7 @@ class PhenomenonRecommendationEngine:
         self.llm_service = llm_service
         self._phenomenon_dao = PhenomenonDAO(db_path)
         self._root_cause_dao = RootCauseDAO(db_path)
+        self._ticket_anomaly_dao = TicketAnomalyDAO(db_path)
 
     def recommend_next_action(
         self, session: SessionState
@@ -95,6 +96,7 @@ class PhenomenonRecommendationEngine:
         1. 从每个活跃假设中收集未确认/未否定的现象
         2. 按假设置信度权重排序（与高置信度假设相关的现象优先）
         3. 去重并返回 top-N
+        4. 如果检索到的现象不足，从数据库补充 top 假设的剩余关联现象
 
         Args:
             session: 会话状态
@@ -125,6 +127,7 @@ class PhenomenonRecommendationEngine:
                             "max_confidence": 0.0,  # 关联假设的最高置信度
                             "hypothesis_count": 0,
                             "related_hypotheses": [],  # 关联的假设
+                            "from_db": False,  # 标记是否来自数据库补充
                         }
 
                 if phenomenon_id in phenomenon_scores:
@@ -142,10 +145,40 @@ class PhenomenonRecommendationEngine:
                         "confidence": hyp.confidence,
                     })
 
+        # 如果检索到的现象不足，从数据库补充 top 假设的剩余关联现象
+        if len(phenomenon_scores) < max_count and session.active_hypotheses:
+            top_hyp = session.active_hypotheses[0]
+            # 从数据库获取 top 假设的全部关联现象
+            db_phenomenon_ids = self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(
+                top_hyp.root_cause_id
+            )
+            for phenomenon_id in db_phenomenon_ids:
+                if phenomenon_id in confirmed_ids:
+                    continue
+                if phenomenon_id in denied_ids:
+                    continue
+                if phenomenon_id in phenomenon_scores:
+                    continue  # 已经在列表中
+
+                phenomenon = self._get_phenomenon_by_id(phenomenon_id)
+                if phenomenon:
+                    phenomenon_scores[phenomenon_id] = {
+                        "phenomenon": phenomenon,
+                        "weight": top_hyp.confidence * 0.5,  # 数据库补充的权重降低
+                        "max_confidence": top_hyp.confidence,
+                        "hypothesis_count": 1,
+                        "related_hypotheses": [{
+                            "root_cause": top_hyp.root_cause_id,
+                            "confidence": top_hyp.confidence,
+                        }],
+                        "from_db": True,  # 标记来自数据库补充
+                    }
+
         # 排序：优先推荐与高置信度假设相关的现象
         ranked = sorted(
             phenomenon_scores.values(),
             key=lambda x: (
+                not x.get("from_db", False),  # 检索到的优先于数据库补充的
                 x["max_confidence"],    # 关联假设的最高置信度优先
                 x["weight"],            # 权重高的优先（被多个假设支持）
             ),
