@@ -9,6 +9,8 @@ from dbdiag.dao.ticket_dao import TicketDAO, TicketAnomalyDAO
 from dbdiag.dao.root_cause_dao import RootCauseDAO
 from dbdiag.dao.session_dao import SessionDAO
 from dbdiag.dao.raw_anomaly_dao import RawAnomalyDAO
+from dbdiag.dao.raw_ticket_dao import RawTicketDAO
+from dbdiag.dao.index_builder_dao import IndexBuilderDAO
 
 __all__ = [
     "BaseDAO",
@@ -18,4 +20,6 @@ __all__ = [
     "RootCauseDAO",
     "SessionDAO",
     "RawAnomalyDAO",
+    "RawTicketDAO",
+    "IndexBuilderDAO",
 ]

@@ -2,20 +2,17 @@
 pydantic>=2.0.0
 pyyaml>=6.0.0
 click>=8.0.0
+numpy>=1.24.0
 
 # OpenAI SDK（兼容 API）
 openai>=1.0.0
 
-# 进度条
-tqdm>=4.65.0
-
-# Web 框架（后续 Phase 3 使用）
+# Web 框架
 fastapi>=0.100.0
 uvicorn>=0.23.0
 
-# UI 框架（后续 Phase 4 使用）
-gradio>=4.0.0
+# 可视化
+pyvis>=0.3.0
 
 # 测试
 pytest>=7.0.0
-pytest-asyncio>=0.21.0

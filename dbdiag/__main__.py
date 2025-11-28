@@ -81,10 +81,10 @@ def init(db: str):
 )
 def import_data(data: str, db: str):
     """导入工单数据到数据库"""
-    from dbdiag.scripts.import_tickets import import_tickets_v2
+    from dbdiag.scripts.import_raw_tickets import import_tickets
 
     try:
-        import_tickets_v2(data, db)
+        import_tickets(data, db)
         click.echo("\n[OK] 数据导入成功")
     except Exception as e:
         click.echo(f"\n[ERROR] 导入失败: {e}", err=True)

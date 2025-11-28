@@ -10,18 +10,15 @@
 5. 生成 phenomena + ticket_anomalies
 6. 构建向量索引
 """
-import sqlite3
-import json
 import numpy as np
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from datetime import datetime
 
 from dbdiag.utils.config import load_config
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.services.llm_service import LLMService
-from dbdiag.utils.vector_utils import serialize_f32, cosine_similarity
-from dbdiag.dao import RawAnomalyDAO
+from dbdiag.utils.vector_utils import cosine_similarity
+from dbdiag.dao import RawAnomalyDAO, IndexBuilderDAO
 
 
 def rebuild_index(
@@ -55,8 +52,9 @@ def rebuild_index(
     embedding_service = EmbeddingService(config)
     llm_service = LLMService(config)
 
-    # 使用 DAO 读取原始异常
+    # 初始化 DAO
     raw_anomaly_dao = RawAnomalyDAO(db_path)
+    index_builder_dao = IndexBuilderDAO(db_path)
 
     # 1. 读取原始异常
     print("\n[1/6] 读取原始异常...")
@@ -82,106 +80,43 @@ def rebuild_index(
     clusters = cluster_by_similarity(raw_anomalies, similarity_threshold)
     print(f"  聚类结果: {len(raw_anomalies)} 个异常 -> {len(clusters)} 个聚类")
 
-    # 批量写入操作使用直接 sqlite3 连接（需要事务控制）
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    # 4. 生成标准现象
+    print("\n[4/6] 生成标准现象...")
+    phenomena = []
+    anomaly_to_phenomenon = {}  # raw_anomaly_id -> phenomenon_id
 
+    for cluster_id, cluster_items in enumerate(clusters):
+        phenomenon = _generate_phenomenon(
+            cluster_id=cluster_id,
+            cluster_items=cluster_items,
+            llm_service=llm_service,
+        )
+        phenomena.append(phenomenon)
+
+        # 记录映射关系
+        for item in cluster_items:
+            anomaly_to_phenomenon[item["id"]] = phenomenon["phenomenon_id"]
+
+    print(f"  生成了 {len(phenomena)} 个标准现象")
+
+    # 5. 使用 DAO 保存到数据库
+    print("\n[5/6] 保存到数据库...")
     try:
-        # 4. 清除旧数据
-        print("\n[4/6] 清除旧数据...")
-        cursor.execute("DELETE FROM ticket_anomalies")
-        cursor.execute("DELETE FROM phenomena")
-        conn.commit()
-        print("  已清除旧的 phenomena 和 ticket_anomalies")
-
-        # 5. 生成标准现象
-        print("\n[5/6] 生成标准现象...")
-        phenomena = []
-        anomaly_to_phenomenon = {}  # raw_anomaly_id -> phenomenon_id
-
-        for cluster_id, cluster_items in enumerate(clusters):
-            phenomenon = _generate_phenomenon(
-                cluster_id=cluster_id,
-                cluster_items=cluster_items,
-                llm_service=llm_service,
-            )
-            phenomena.append(phenomenon)
-
-            # 记录映射关系
-            for item in cluster_items:
-                anomaly_to_phenomenon[item["id"]] = phenomenon["phenomenon_id"]
-
-        print(f"  生成了 {len(phenomena)} 个标准现象")
-
-        # 6. 保存到数据库
-        print("\n[6/6] 保存到数据库...")
-
-        # 保存 phenomena
-        for p in phenomena:
-            cursor.execute("""
-                INSERT INTO phenomena (
-                    phenomenon_id, description, observation_method,
-                    source_anomaly_ids, cluster_size, embedding
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                p["phenomenon_id"],
-                p["description"],
-                p["observation_method"],
-                json.dumps(p["source_anomaly_ids"]),
-                p["cluster_size"],
-                serialize_f32(p["embedding"]),
-            ))
-
-        # 保存 ticket_anomalies
-        for anomaly in raw_anomalies:
-            phenomenon_id = anomaly_to_phenomenon[anomaly["id"]]
-            cursor.execute("""
-                INSERT INTO ticket_anomalies (
-                    id, ticket_id, phenomenon_id, why_relevant, raw_anomaly_id
-                )
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                anomaly["id"],
-                anomaly["ticket_id"],
-                phenomenon_id,
-                anomaly["why_relevant"],
-                anomaly["id"],
-            ))
-
-        # 构建 root_causes 表
-        print("\n[6.5/7] 构建 root_causes 表...")
-        root_cause_map = _build_root_causes(cursor)
-        print(f"  生成了 {len(root_cause_map)} 个根因")
-
-        # 同步到 tickets 表（包含 root_cause_id）
-        _sync_to_tickets(cursor, root_cause_map)
-
-        conn.commit()
-
-        # 显示统计
-        cursor.execute("SELECT COUNT(*) FROM phenomena")
-        phenomena_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM ticket_anomalies")
-        ticket_anomalies_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM root_causes")
-        root_causes_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM tickets")
-        tickets_count = cursor.fetchone()[0]
+        stats = index_builder_dao.rebuild_all(
+            phenomena=phenomena,
+            raw_anomalies=raw_anomalies,
+            anomaly_to_phenomenon=anomaly_to_phenomenon,
+        )
 
         print(f"\n[OK] 索引重建完成")
-        print(f"  phenomena: {phenomena_count}")
-        print(f"  ticket_anomalies: {ticket_anomalies_count}")
-        print(f"  root_causes: {root_causes_count}")
-        print(f"  tickets: {tickets_count}")
+        print(f"  phenomena: {stats['phenomena']}")
+        print(f"  ticket_anomalies: {stats['ticket_anomalies']}")
+        print(f"  root_causes: {stats['root_causes']}")
+        print(f"  tickets: {stats['tickets']}")
 
     except Exception as e:
         print(f"\n[ERROR] 索引重建失败: {e}")
-        conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 def cluster_by_similarity(
@@ -295,106 +230,6 @@ def _generate_phenomenon(
         "cluster_size": len(cluster_items),
         "embedding": center_embedding,
     }
-
-
-def _build_root_causes(cursor: sqlite3.Cursor) -> Dict[str, str]:
-    """
-    从 raw_tickets 提取唯一根因，生成 root_causes 表
-
-    Returns:
-        根因文本到 root_cause_id 的映射
-    """
-    # 1. 提取唯一根因及其统计信息
-    cursor.execute("""
-        SELECT
-            root_cause,
-            GROUP_CONCAT(ticket_id) as ticket_ids,
-            COUNT(*) as ticket_count,
-            MAX(solution) as solution
-        FROM raw_tickets
-        GROUP BY root_cause
-        ORDER BY ticket_count DESC
-    """)
-
-    root_cause_rows = cursor.fetchall()
-    root_cause_map = {}  # root_cause_text -> root_cause_id
-
-    # 2. 清除旧数据
-    cursor.execute("DELETE FROM root_causes")
-
-    # 3. 生成 root_causes 记录
-    for idx, row in enumerate(root_cause_rows):
-        root_cause_text = row[0]
-        ticket_ids = row[1].split(",") if row[1] else []
-        ticket_count = row[2]
-        solution = row[3] or ""
-
-        root_cause_id = f"RC-{idx + 1:04d}"
-        root_cause_map[root_cause_text] = root_cause_id
-
-        # 查找该根因关联的现象 ID
-        cursor.execute("""
-            SELECT DISTINCT ta.phenomenon_id
-            FROM ticket_anomalies ta
-            WHERE ta.ticket_id IN (
-                SELECT ticket_id FROM raw_tickets WHERE root_cause = ?
-            )
-        """, (root_cause_text,))
-        phenomenon_ids = [r[0] for r in cursor.fetchall()]
-
-        cursor.execute("""
-            INSERT INTO root_causes (
-                root_cause_id, description, solution,
-                key_phenomenon_ids, related_ticket_ids, ticket_count
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            root_cause_id,
-            root_cause_text,
-            solution,
-            json.dumps(phenomenon_ids),
-            json.dumps(ticket_ids),
-            ticket_count,
-        ))
-
-    return root_cause_map
-
-
-def _sync_to_tickets(cursor: sqlite3.Cursor, root_cause_map: Dict[str, str]) -> None:
-    """
-    同步数据到 tickets 表，包含 root_cause_id 外键
-
-    Args:
-        cursor: 数据库游标
-        root_cause_map: 根因文本到 root_cause_id 的映射
-    """
-    # 先清空 tickets 表
-    cursor.execute("DELETE FROM tickets")
-
-    # 从 raw_tickets 读取数据并写入 tickets
-    cursor.execute("""
-        SELECT ticket_id, metadata_json, description, root_cause, solution
-        FROM raw_tickets
-    """)
-
-    for row in cursor.fetchall():
-        ticket_id, metadata_json, description, root_cause_text, solution = row
-        root_cause_id = root_cause_map.get(root_cause_text)
-
-        cursor.execute("""
-            INSERT INTO tickets (
-                ticket_id, metadata_json, description,
-                root_cause_id, root_cause, solution
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            ticket_id,
-            metadata_json or "{}",
-            description,
-            root_cause_id,
-            root_cause_text,
-            solution,
-        ))
 
 
 if __name__ == "__main__":
