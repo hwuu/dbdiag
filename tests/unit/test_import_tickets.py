@@ -10,8 +10,8 @@ import warnings
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.init_db import init_database
-from scripts.import_tickets import import_tickets, import_tickets_v2
+from dbdiag.scripts.init_db import init_database
+from dbdiag.scripts.import_tickets import import_tickets, import_tickets_v2
 
 
 class TestImportTicketsV2:

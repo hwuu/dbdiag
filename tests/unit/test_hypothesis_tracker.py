@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.init_db import init_database
+from dbdiag.scripts.init_db import init_database
 from dbdiag.models import SessionState, ConfirmedPhenomenon, Hypothesis
 from dbdiag.utils.vector_utils import serialize_f32
 

@@ -10,8 +10,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.init_db import init_database
-from scripts.import_tickets import import_tickets_v2
+from dbdiag.scripts.init_db import init_database
+from dbdiag.scripts.import_tickets import import_tickets_v2
 
 
 class TestRebuildIndex:
@@ -93,17 +93,17 @@ class TestRebuildIndex:
                 [0.7, 0.8, 0.9],  # TICKET-003_anomaly_1 (连接数)
             ]
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
                     rebuild_index(db_path, similarity_threshold=0.95)
 
             conn = sqlite3.connect(db_path)
@@ -128,17 +128,17 @@ class TestRebuildIndex:
                 [0.7, 0.8, 0.9],
             ]
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
                     rebuild_index(db_path, similarity_threshold=0.95)
 
             conn = sqlite3.connect(db_path)
@@ -164,17 +164,17 @@ class TestRebuildIndex:
                 [0.7, 0.8, 0.9],  # TICKET-003_anomaly_1 (连接数) - 不同
             ]
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
                     rebuild_index(db_path, similarity_threshold=0.99)
 
             conn = sqlite3.connect(db_path)
@@ -199,17 +199,17 @@ class TestRebuildIndex:
 
             mock_embeddings = [[0.1] * 3] * 4
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
                     rebuild_index(db_path, similarity_threshold=0.95)
 
             conn = sqlite3.connect(db_path)
@@ -232,17 +232,17 @@ class TestRebuildIndex:
 
             mock_embeddings = [[0.1] * 3] * 4
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
 
                     # 第一次 rebuild
                     rebuild_index(db_path, similarity_threshold=0.95)
@@ -272,17 +272,17 @@ class TestRebuildIndex:
 
             mock_embeddings = [[0.1] * 3] * 4
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
                     rebuild_index(db_path, similarity_threshold=0.95)
 
             conn = sqlite3.connect(db_path)
@@ -313,17 +313,17 @@ class TestRebuildIndex:
 
             mock_embeddings = [[0.1] * 3] * 4
 
-            with patch('scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
                 mock_embedding_instance.encode_batch.return_value = mock_embeddings
                 MockEmbedding.return_value = mock_embedding_instance
 
-                with patch('scripts.rebuild_index.LLMService') as MockLLM:
+                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                     mock_llm_instance = Mock()
                     mock_llm_instance.generate_simple.return_value = "标准化描述"
                     MockLLM.return_value = mock_llm_instance
 
-                    from scripts.rebuild_index import rebuild_index
+                    from dbdiag.scripts.rebuild_index import rebuild_index
                     rebuild_index(db_path, similarity_threshold=0.95)
 
             conn = sqlite3.connect(db_path)
@@ -363,7 +363,7 @@ class TestClusterBySimilarity:
 
     def test_cluster_identical_vectors(self):
         """测试:完全相同的向量应聚类到一起"""
-        from scripts.rebuild_index import cluster_by_similarity
+        from dbdiag.scripts.rebuild_index import cluster_by_similarity
 
         items = [
             {"id": "a", "embedding": [1.0, 0.0, 0.0]},
@@ -378,7 +378,7 @@ class TestClusterBySimilarity:
 
     def test_cluster_all_different(self):
         """测试:完全不同的向量应各自成聚类"""
-        from scripts.rebuild_index import cluster_by_similarity
+        from dbdiag.scripts.rebuild_index import cluster_by_similarity
 
         items = [
             {"id": "a", "embedding": [1.0, 0.0, 0.0]},
