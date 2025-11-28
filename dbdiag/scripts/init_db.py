@@ -205,8 +205,9 @@ def init_database(db_path: Optional[str] = None) -> None:
     """
     if db_path is None:
         # 默认使用项目根目录下的 data/tickets.db
-        # __file__ 是 scripts/init_db.py，parent 是 scripts/，parent.parent 是项目根目录
-        project_root = Path(__file__).parent.parent
+        # __file__ 是 dbdiag/scripts/init_db.py
+        # parent = dbdiag/scripts/, parent.parent = dbdiag/, parent.parent.parent = 项目根目录
+        project_root = Path(__file__).parent.parent.parent
         data_dir = project_root / "data"
         data_dir.mkdir(exist_ok=True)
         db_path = str(data_dir / "tickets.db")

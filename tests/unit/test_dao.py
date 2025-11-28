@@ -233,6 +233,53 @@ class TestTicketDAO:
 
             assert len(result) == 2
 
+    def test_get_by_id_exists(self):
+        """测试: 按 ID 获取存在的工单"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = self._setup_test_db(tmpdir)
+            dao = TicketDAO(db_path)
+
+            result = dao.get_by_id("T-001")
+
+            assert result is not None
+            assert result["ticket_id"] == "T-001"
+            assert result["root_cause_id"] == "RC-0001"
+
+    def test_get_by_id_not_exists(self):
+        """测试: 按 ID 获取不存在的工单"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = self._setup_test_db(tmpdir)
+            dao = TicketDAO(db_path)
+
+            result = dao.get_by_id("T-999")
+
+            assert result is None
+
+    def test_get_all(self):
+        """测试: 获取所有工单"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = self._setup_test_db(tmpdir)
+            dao = TicketDAO(db_path)
+
+            result = dao.get_all()
+
+            assert len(result) == 2
+            assert all("ticket_id" in r for r in result)
+            assert all("root_cause_id" in r for r in result)
+            # 验证排序 (ORDER BY ticket_id)
+            assert result[0]["ticket_id"] == "T-001"
+            assert result[1]["ticket_id"] == "T-002"
+
+    def test_count(self):
+        """测试: 获取工单总数"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = self._setup_test_db(tmpdir)
+            dao = TicketDAO(db_path)
+
+            result = dao.count()
+
+            assert result == 2
+
 
 class TestTicketAnomalyDAO:
     """TicketAnomalyDAO 测试"""
