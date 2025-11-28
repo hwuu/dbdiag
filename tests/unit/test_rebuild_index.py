@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
-from dbdiag.scripts.import_tickets import import_tickets_v2
+from dbdiag.scripts.import_raw_tickets import import_tickets
 
 
 class TestRebuildIndex:
@@ -77,7 +77,7 @@ class TestRebuildIndex:
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
 
-        import_tickets_v2(data_path, db_path)
+        import_tickets(data_path, db_path)
         return db_path, data_path
 
     def test_rebuild_index_creates_phenomena(self):

@@ -139,3 +139,17 @@ class TicketAnomalyDAO(BaseDAO):
                 (phenomenon_id,),
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_all_associations(self) -> List[Dict[str, Any]]:
+        """
+        获取所有工单-现象关联
+
+        Returns:
+            关联记录列表，包含 ticket_id 和 phenomenon_id
+        """
+        with self.get_cursor() as (conn, cursor):
+            cursor.execute("""
+                SELECT ticket_id, phenomenon_id
+                FROM ticket_anomalies
+            """)
+            return [dict(row) for row in cursor.fetchall()]

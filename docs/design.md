@@ -1767,7 +1767,7 @@ dbdiag/
 │   ├── scripts/                  # 初始化脚本
 │   │   ├── __init__.py
 │   │   ├── init_db.py            # 初始化数据库
-│   │   ├── import_tickets.py     # 数据导入脚本
+│   │   ├── import_raw_tickets.py # 原始数据导入脚本
 │   │   ├── rebuild_index.py      # 重建索引（phenomena、root_causes）
 │   │   └── visualize_knowledge_graph.py  # 知识图谱可视化
 │   ├── core/                     # 核心逻辑

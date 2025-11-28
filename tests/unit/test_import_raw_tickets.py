@@ -1,4 +1,4 @@
-"""import_tickets 单元测试"""
+"""import_raw_tickets 单元测试"""
 import pytest
 import sqlite3
 import tempfile
@@ -6,19 +6,18 @@ import os
 import json
 from pathlib import Path
 import sys
-import warnings
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
-from dbdiag.scripts.import_tickets import import_tickets, import_tickets_v2
+from dbdiag.scripts.import_raw_tickets import import_tickets
 
 
-class TestImportTicketsV2:
-    """V2 导入功能测试"""
+class TestImportTickets:
+    """原始工单导入功能测试"""
 
-    def _create_test_data_v2(self, tmpdir: str) -> str:
-        """创建 V2 格式的测试数据"""
+    def _create_test_data(self, tmpdir: str) -> str:
+        """创建测试数据"""
         data = [
             {
                 "ticket_id": "TICKET-001",
@@ -54,19 +53,19 @@ class TestImportTicketsV2:
                 ]
             }
         ]
-        data_path = os.path.join(tmpdir, "tickets_v2.json")
+        data_path = os.path.join(tmpdir, "tickets.json")
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         return data_path
 
-    def test_import_tickets_v2_to_raw_tables(self):
-        """测试:V2 导入应写入 raw_tickets 和 raw_anomalies 表"""
+    def test_import_tickets_to_raw_tables(self):
+        """测试: 导入应写入 raw_tickets 和 raw_anomalies 表"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             init_database(db_path)
-            data_path = self._create_test_data_v2(tmpdir)
+            data_path = self._create_test_data(tmpdir)
 
-            import_tickets_v2(data_path, db_path)
+            import_tickets(data_path, db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -81,14 +80,14 @@ class TestImportTicketsV2:
 
             conn.close()
 
-    def test_import_tickets_v2_raw_ticket_content(self):
-        """测试:V2 导入的 raw_tickets 内容正确"""
+    def test_import_tickets_raw_ticket_content(self):
+        """测试: 导入的 raw_tickets 内容正确"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             init_database(db_path)
-            data_path = self._create_test_data_v2(tmpdir)
+            data_path = self._create_test_data(tmpdir)
 
-            import_tickets_v2(data_path, db_path)
+            import_tickets(data_path, db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -102,14 +101,14 @@ class TestImportTicketsV2:
 
             conn.close()
 
-    def test_import_tickets_v2_raw_anomaly_content(self):
-        """测试:V2 导入的 raw_anomalies 内容正确"""
+    def test_import_tickets_raw_anomaly_content(self):
+        """测试: 导入的 raw_anomalies 内容正确"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             init_database(db_path)
-            data_path = self._create_test_data_v2(tmpdir)
+            data_path = self._create_test_data(tmpdir)
 
-            import_tickets_v2(data_path, db_path)
+            import_tickets(data_path, db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -136,18 +135,18 @@ class TestImportTicketsV2:
 
             conn.close()
 
-    def test_import_tickets_v2_skip_duplicate(self):
-        """测试:V2 导入应跳过重复数据"""
+    def test_import_tickets_skip_duplicate(self):
+        """测试: 导入应跳过重复数据"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             init_database(db_path)
-            data_path = self._create_test_data_v2(tmpdir)
+            data_path = self._create_test_data(tmpdir)
 
             # 第一次导入
-            import_tickets_v2(data_path, db_path)
+            import_tickets(data_path, db_path)
 
             # 第二次导入（应跳过重复）
-            import_tickets_v2(data_path, db_path)
+            import_tickets(data_path, db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -156,72 +155,14 @@ class TestImportTicketsV2:
 
             conn.close()
 
-    def test_import_tickets_v2_file_not_found(self):
-        """测试:V2 导入不存在的文件应抛出异常"""
+    def test_import_tickets_file_not_found(self):
+        """测试: 导入不存在的文件应抛出异常"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             init_database(db_path)
 
             with pytest.raises(FileNotFoundError):
-                import_tickets_v2("/nonexistent/path.json", db_path)
-
-
-class TestImportTicketsV1Deprecated:
-    """V1 导入功能测试（deprecated）"""
-
-    def _create_test_data_v1(self, tmpdir: str) -> str:
-        """创建 V1 格式的测试数据"""
-        data = [
-            {
-                "ticket_id": "T001",
-                "metadata": {"version": "14.5"},
-                "description": "查询慢",
-                "root_cause": "索引问题",
-                "solution": "重建索引",
-                "diagnostic_steps": [
-                    {
-                        "observed_fact": "wait_io 高",
-                        "observation_method": "SELECT",
-                        "analysis_result": "IO 瓶颈"
-                    }
-                ]
-            }
-        ]
-        data_path = os.path.join(tmpdir, "tickets_v1.json")
-        with open(data_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        return data_path
-
-    def test_import_tickets_v1_still_works(self):
-        """测试:V1 导入仍然可用（向后兼容）"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test.db")
-            init_database(db_path)
-            data_path = self._create_test_data_v1(tmpdir)
-
-            # V1 导入应该仍然可用
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                import_tickets(data_path, db_path)
-
-                # 验证触发了 deprecation 警告
-                deprecation_warnings = [
-                    warning for warning in w
-                    if issubclass(warning.category, DeprecationWarning)
-                ]
-                assert len(deprecation_warnings) >= 1
-
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            # V1 表应该有数据
-            cursor.execute("SELECT COUNT(*) FROM tickets")
-            assert cursor.fetchone()[0] == 1
-
-            cursor.execute("SELECT COUNT(*) FROM diagnostic_steps")
-            assert cursor.fetchone()[0] == 1
-
-            conn.close()
+                import_tickets("/nonexistent/path.json", db_path)
 
 
 if __name__ == "__main__":

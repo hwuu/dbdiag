@@ -7,10 +7,11 @@
 - hierarchical: 分层布局，从上到下显示层级关系
 - tree: 树状布局，从左到右显示
 """
-import sqlite3
 import argparse
 from pathlib import Path
 from pyvis.network import Network
+
+from dbdiag.dao import RawTicketDAO, PhenomenonDAO, TicketAnomalyDAO
 
 
 # 布局配置
@@ -114,9 +115,10 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
         output_path: 输出 HTML 路径
         layout: 布局模式 (force/hierarchical/tree/radial)
     """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    # 初始化 DAO
+    raw_ticket_dao = RawTicketDAO(db_path)
+    phenomenon_dao = PhenomenonDAO(db_path)
+    ticket_anomaly_dao = TicketAnomalyDAO(db_path)
 
     # 创建网络图（占满整个视口）
     net = Network(
@@ -136,22 +138,16 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
     print(f"使用布局: {layout}")
 
     # 1. 获取所有根因（去重）
-    cursor.execute("SELECT DISTINCT root_cause FROM raw_tickets")
-    root_causes = {row["root_cause"] for row in cursor.fetchall()}
+    root_causes = raw_ticket_dao.get_all_root_causes()
 
     # 2. 获取所有工单
-    cursor.execute("SELECT ticket_id, root_cause, description FROM raw_tickets")
-    tickets = cursor.fetchall()
+    tickets = raw_ticket_dao.get_all()
 
-    # 3. 获取所有现象
-    cursor.execute("SELECT phenomenon_id, description FROM phenomena")
-    phenomena = cursor.fetchall()
+    # 3. 获取所有现象（不限制数量）
+    phenomena = phenomenon_dao.get_all(limit=10000)
 
     # 4. 获取关联关系
-    cursor.execute("SELECT ticket_id, phenomenon_id FROM ticket_anomalies")
-    associations = cursor.fetchall()
-
-    conn.close()
+    associations = ticket_anomaly_dao.get_all_associations()
 
     # 添加根因节点（红色，大号）- 层级 0
     for idx, root_cause in enumerate(root_causes):
