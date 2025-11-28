@@ -2,13 +2,12 @@
 
 维护并行的根因假设，动态计算置信度
 """
-import sqlite3
-import json
 from typing import List, Set, Dict, Optional
 from collections import defaultdict
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
 from dbdiag.core.retriever import PhenomenonRetriever
+from dbdiag.dao import TicketDAO, TicketAnomalyDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 
@@ -40,6 +39,8 @@ class PhenomenonHypothesisTracker:
         self.embedding_service = embedding_service
         self.progress_callback = progress_callback
         self.retriever = PhenomenonRetriever(db_path, embedding_service)
+        self._ticket_dao = TicketDAO(db_path)
+        self._ticket_anomaly_dao = TicketAnomalyDAO(db_path)
 
     def _report_progress(self, message: str) -> None:
         """报告进度"""
@@ -152,41 +153,26 @@ class PhenomenonHypothesisTracker:
             excluded_phenomenon_ids=set(),  # 不排除任何现象
         )
 
-        # 从 ticket_anomalies 获取关联的 ticket 信息
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        root_cause_map = defaultdict(lambda: {"phenomena": [], "ticket_ids": set()})
 
-        try:
-            root_cause_map = defaultdict(lambda: {"phenomena": [], "ticket_ids": set()})
+        for phenomenon, score in retrieved_phenomena:
+            # 查找关联的 tickets（使用 DAO）
+            ticket_rows = self._ticket_dao.get_by_phenomenon_id(phenomenon.phenomenon_id)
 
-            for phenomenon, score in retrieved_phenomena:
-                # 查找关联的 tickets（使用 tickets 表，通过 root_cause_id 关联）
-                cursor.execute("""
-                    SELECT DISTINCT ta.ticket_id, t.root_cause_id
-                    FROM ticket_anomalies ta
-                    JOIN tickets t ON ta.ticket_id = t.ticket_id
-                    WHERE ta.phenomenon_id = ?
-                      AND t.root_cause_id IS NOT NULL
-                """, (phenomenon.phenomenon_id,))
+            for row in ticket_rows:
+                root_cause_id = row["root_cause_id"]
+                ticket_id = row["ticket_id"]
 
-                for row in cursor.fetchall():
-                    root_cause_id = row["root_cause_id"]
-                    ticket_id = row["ticket_id"]
+                root_cause_map[root_cause_id]["phenomena"].append(phenomenon)
+                root_cause_map[root_cause_id]["ticket_ids"].add(ticket_id)
 
-                    root_cause_map[root_cause_id]["phenomena"].append(phenomenon)
-                    root_cause_map[root_cause_id]["ticket_ids"].add(ticket_id)
+        # 转换 set 为 list
+        for root_cause in root_cause_map:
+            root_cause_map[root_cause]["ticket_ids"] = list(
+                root_cause_map[root_cause]["ticket_ids"]
+            )
 
-            # 转换 set 为 list
-            for root_cause in root_cause_map:
-                root_cause_map[root_cause]["ticket_ids"] = list(
-                    root_cause_map[root_cause]["ticket_ids"]
-                )
-
-            return dict(root_cause_map)
-
-        finally:
-            conn.close()
+        return dict(root_cause_map)
 
     def _compute_confidence(
         self,
@@ -258,20 +244,7 @@ class PhenomenonHypothesisTracker:
         Returns:
             现象 ID 集合
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute("""
-                SELECT DISTINCT ta.phenomenon_id
-                FROM ticket_anomalies ta
-                JOIN tickets t ON ta.ticket_id = t.ticket_id
-                WHERE t.root_cause_id = ?
-            """, (root_cause_id,))
-
-            return {row[0] for row in cursor.fetchall()}
-        finally:
-            conn.close()
+        return self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(root_cause_id)
 
     def _identify_missing_phenomena(
         self,

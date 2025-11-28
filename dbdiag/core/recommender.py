@@ -2,12 +2,11 @@
 
 基于当前假设状态决定下一步行动
 """
-import sqlite3
-import json
 from typing import Optional, List, Dict
 from collections import defaultdict
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
+from dbdiag.dao import PhenomenonDAO, RootCauseDAO
 from dbdiag.services.llm_service import LLMService
 
 
@@ -27,6 +26,8 @@ class PhenomenonRecommendationEngine:
         """
         self.db_path = db_path
         self.llm_service = llm_service
+        self._phenomenon_dao = PhenomenonDAO(db_path)
+        self._root_cause_dao = RootCauseDAO(db_path)
 
     def recommend_next_action(
         self, session: SessionState
@@ -304,54 +305,14 @@ class PhenomenonRecommendationEngine:
 
     def _get_root_cause_description(self, root_cause_id: str) -> str:
         """根据 ID 获取根因描述"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                "SELECT description FROM root_causes WHERE root_cause_id = ?",
-                (root_cause_id,),
-            )
-            row = cursor.fetchone()
-            return row[0] if row else root_cause_id
-        finally:
-            conn.close()
+        return self._root_cause_dao.get_description(root_cause_id)
 
     def _get_phenomenon_by_id(self, phenomenon_id: str) -> Optional[Phenomenon]:
         """根据 ID 获取现象"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT
-                    phenomenon_id, description, observation_method,
-                    source_anomaly_ids, cluster_size
-                FROM phenomena
-                WHERE phenomenon_id = ?
-                """,
-                (phenomenon_id,),
-            )
-            row = cursor.fetchone()
-
-            if row:
-                source_ids = row["source_anomaly_ids"]
-                if isinstance(source_ids, str):
-                    source_ids = json.loads(source_ids)
-
-                return Phenomenon(
-                    phenomenon_id=row["phenomenon_id"],
-                    description=row["description"],
-                    observation_method=row["observation_method"],
-                    source_anomaly_ids=source_ids,
-                    cluster_size=row["cluster_size"],
-                )
-
-            return None
-        finally:
-            conn.close()
+        row_dict = self._phenomenon_dao.get_by_id(phenomenon_id)
+        if row_dict:
+            return self._phenomenon_dao.dict_to_model(row_dict)
+        return None
 
     def _generate_phenomena_recommendation(
         self, session: SessionState, phenomena_info: List[Dict]
