@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 from pyvis.network import Network
 
-from dbdiag.dao import RawTicketDAO, PhenomenonDAO, TicketAnomalyDAO
+from dbdiag.dao import RootCauseDAO, TicketDAO, PhenomenonDAO, TicketAnomalyDAO
 
 
 # 布局配置
@@ -116,7 +116,8 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
         layout: 布局模式 (force/hierarchical/tree/radial)
     """
     # 初始化 DAO
-    raw_ticket_dao = RawTicketDAO(db_path)
+    root_cause_dao = RootCauseDAO(db_path)
+    ticket_dao = TicketDAO(db_path)
     phenomenon_dao = PhenomenonDAO(db_path)
     ticket_anomaly_dao = TicketAnomalyDAO(db_path)
 
@@ -137,11 +138,11 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
     net.set_options(LAYOUT_OPTIONS[layout])
     print(f"使用布局: {layout}")
 
-    # 1. 获取所有根因（去重）
-    root_causes = raw_ticket_dao.get_all_root_causes()
+    # 1. 获取所有根因
+    root_causes = root_cause_dao.get_all()
 
     # 2. 获取所有工单
-    tickets = raw_ticket_dao.get_all()
+    tickets = ticket_dao.get_all()
 
     # 3. 获取所有现象（不限制数量）
     phenomena = phenomenon_dao.get_all(limit=10000)
@@ -149,55 +150,60 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
     # 4. 获取关联关系
     associations = ticket_anomaly_dao.get_all_associations()
 
-    # 添加根因节点（红色，大号）- 层级 0
-    for idx, root_cause in enumerate(root_causes):
-        short_label = root_cause[:20] + "..." if len(root_cause) > 20 else root_cause
+    # 添加根因节点（蓝色圆形，大号）- 层级 0
+    for root_cause in root_causes:
+        rc_id = root_cause["root_cause_id"]
+        desc = root_cause["description"]
+        short_label = desc[:20] + "..." if len(desc) > 20 else desc
         net.add_node(
-            f"RC:{root_cause}",
-            label=short_label,
-            title=f"【根因】\n{root_cause}",
-            color="#e74c3c",
+            f"RC:{rc_id}",
+            label=f"{rc_id}\n{short_label}",
+            title=f"【根因】{rc_id}\n{desc}",
+            color="#3498db",
             size=35,
-            shape="diamond",
+            shape="dot",
             group="root_cause",
             level=0,  # 最顶层
         )
 
-    # 添加工单节点（蓝色，中号）- 层级 1
+    # 添加工单节点（黄色正方形，中号）- 层级 1
     for ticket in tickets:
         ticket_id = ticket["ticket_id"]
-        root_cause = ticket["root_cause"]
-        desc = ticket["description"][:100] + "..." if len(ticket["description"]) > 100 else ticket["description"]
+        root_cause_id = ticket["root_cause_id"]
+        desc = ticket["description"]
+        short_desc = desc[:20] + "..." if len(desc) > 20 else desc
+        full_desc = desc[:100] + "..." if len(desc) > 100 else desc
 
         net.add_node(
             f"T:{ticket_id}",
-            label=ticket_id,
-            title=f"【工单】{ticket_id}\n\n{desc}",
-            color="#3498db",
-            size=20,
-            shape="dot",
+            label=f"{ticket_id}\n{short_desc}",
+            title=f"【工单】{ticket_id}\n\n{full_desc}",
+            color="#f1c40f",
+            size=25,
+            shape="square",
             group="ticket",
             level=1,  # 中间层
         )
 
-        # 根因 → 工单（反转方向，让根因在上）
-        net.add_edge(
-            f"RC:{root_cause}",
-            f"T:{ticket_id}",
-            color="#95a5a6",
-            width=2,
-            title="根因",
-        )
+        # 根因 → 工单
+        if root_cause_id:
+            net.add_edge(
+                f"RC:{root_cause_id}",
+                f"T:{ticket_id}",
+                color="#95a5a6",
+                width=2,
+                title="根因",
+            )
 
     # 添加现象节点（绿色，小号）- 层级 2
     for phenomenon in phenomena:
         phenomenon_id = phenomenon["phenomenon_id"]
         desc = phenomenon["description"]
-        short_label = phenomenon_id
+        short_desc = desc[:20] + "..." if len(desc) > 20 else desc
 
         net.add_node(
             f"P:{phenomenon_id}",
-            label=short_label,
+            label=f"{phenomenon_id}\n{short_desc}",
             title=f"【现象】{phenomenon_id}\n\n{desc}",
             color="#2ecc71",
             size=15,

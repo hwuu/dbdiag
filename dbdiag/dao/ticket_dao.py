@@ -80,6 +80,23 @@ class TicketDAO(BaseDAO):
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_all(self) -> List[Dict[str, Any]]:
+        """
+        获取所有工单
+
+        Returns:
+            工单列表
+        """
+        with self.get_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                SELECT ticket_id, description, root_cause, root_cause_id, solution
+                FROM tickets
+                ORDER BY ticket_id
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
     def count(self) -> int:
         """
         获取工单总数

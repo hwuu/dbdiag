@@ -1,6 +1,6 @@
 [
   {
-    "ticket_id": "DB-001",
+    "ticket_id": "T-0001",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -26,11 +26,16 @@
         "description": "n_dead_tup 数量为 500000，autovacuum 未及时清理",
         "observation_method": "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_autovacuum, last_autoanalyze FROM pg_stat_user_tables WHERE n_dead_tup > 10000 ORDER BY n_dead_tup DESC;",
         "why_relevant": "死元组积累导致索引膨胀，需要执行 VACUUM 和 REINDEX"
+      },
+      {
+        "description": "autovacuum 进程被长事务阻塞，无法正常运行",
+        "observation_method": "SELECT pid, datname, usename, state, backend_xmin, query_start, now() - query_start as duration FROM pg_stat_activity WHERE backend_xmin IS NOT NULL ORDER BY age(backend_xmin) DESC LIMIT 10;",
+        "why_relevant": "长事务持有旧事务快照，阻止 autovacuum 清理死元组"
       }
     ]
   },
   {
-    "ticket_id": "DB-002",
+    "ticket_id": "T-0002",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "13.8",
@@ -56,11 +61,16 @@
         "description": "配置 idle_in_transaction_session_timeout 为 0（未启用超时）",
         "observation_method": "SHOW idle_in_transaction_session_timeout;",
         "why_relevant": "缺少超时保护机制，需要配置合理的超时时间"
+      },
+      {
+        "description": "应用日志显示数据库连接获取超时，但未见连接释放日志",
+        "observation_method": "grep -E '(connection|timeout|release)' /var/log/app/application.log | tail -100",
+        "why_relevant": "应用层连接池管理存在问题，连接未正确归还"
       }
     ]
   },
   {
-    "ticket_id": "DB-003",
+    "ticket_id": "T-0003",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -90,7 +100,7 @@
     ]
   },
   {
-    "ticket_id": "DB-004",
+    "ticket_id": "T-0004",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -120,7 +130,7 @@
     ]
   },
   {
-    "ticket_id": "DB-005",
+    "ticket_id": "T-0005",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "13.8",
@@ -150,7 +160,7 @@
     ]
   },
   {
-    "ticket_id": "DB-006",
+    "ticket_id": "T-0006",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -176,11 +186,21 @@
         "description": "max_wal_size 设置为 1GB，checkpoint_timeout 为 5 分钟",
         "observation_method": "SHOW max_wal_size; SHOW checkpoint_timeout;",
         "why_relevant": "WAL 配置过小，导致频繁触发 checkpoint"
+      },
+      {
+        "description": "checkpoint_warning 日志频繁出现，提示 checkpoint 过于频繁",
+        "observation_method": "grep 'checkpoints are occurring too frequently' /var/log/postgresql/postgresql-*.log",
+        "why_relevant": "PostgreSQL 自身已发出警告，确认 checkpoint 配置不当"
+      },
+      {
+        "description": "checkpoint_completion_target 设置为 0.5，刷盘过于集中",
+        "observation_method": "SHOW checkpoint_completion_target;",
+        "why_relevant": "刷盘集中在 checkpoint 周期的前半段，造成 IO 峰值"
       }
     ]
   },
   {
-    "ticket_id": "DB-007",
+    "ticket_id": "T-0007",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -210,7 +230,7 @@
     ]
   },
   {
-    "ticket_id": "DB-008",
+    "ticket_id": "T-0008",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -240,7 +260,7 @@
     ]
   },
   {
-    "ticket_id": "DB-009",
+    "ticket_id": "T-0009",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "13.8",
@@ -266,11 +286,16 @@
         "description": "autovacuum_vacuum_cost_delay 设置为 20ms，过于保守",
         "observation_method": "SHOW autovacuum_vacuum_cost_delay; SHOW autovacuum_vacuum_cost_limit;",
         "why_relevant": "为了避免影响业务，autovacuum 被限速，导致清理速度跟不上写入速度"
+      },
+      {
+        "description": "表实际大小与 pg_class.reltuples 估算值差异巨大",
+        "observation_method": "SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) as actual_size, reltuples::bigint as estimated_rows FROM pg_class WHERE relkind = 'r' ORDER BY pg_total_relation_size(oid) DESC LIMIT 10;",
+        "why_relevant": "表膨胀导致实际存储空间远大于有效数据量"
       }
     ]
   },
   {
-    "ticket_id": "DB-010",
+    "ticket_id": "T-0010",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -296,11 +321,16 @@
         "description": "归档目标目录不存在或权限不足",
         "observation_method": "检查 archive_command 配置的目标路径",
         "why_relevant": "归档配置错误导致归档失败"
+      },
+      {
+        "description": "PostgreSQL 日志显示 PANIC: could not write to file pg_wal/...",
+        "observation_method": "tail -100 /var/log/postgresql/postgresql-14-main.log | grep -i 'panic\\|error\\|wal'",
+        "why_relevant": "磁盘空间耗尽导致 WAL 写入失败，数据库进入恢复模式"
       }
     ]
   },
   {
-    "ticket_id": "DB-011",
+    "ticket_id": "T-0011",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -330,7 +360,7 @@
     ]
   },
   {
-    "ticket_id": "DB-012",
+    "ticket_id": "T-0012",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -356,11 +386,21 @@
         "description": "pg_locks 显示该事务持有 orders 表的 AccessExclusiveLock",
         "observation_method": "SELECT l.locktype, l.database, l.relation::regclass, l.page, l.tuple, l.virtualxid, l.transactionid, l.mode, l.granted, a.query FROM pg_locks l LEFT JOIN pg_stat_activity a ON l.pid = a.pid WHERE NOT l.granted OR l.mode = 'AccessExclusiveLock';",
         "why_relevant": "确认是 DDL 操作（ALTER TABLE）导致的表级锁"
+      },
+      {
+        "description": "锁等待队列中有超过 50 个会话在排队",
+        "observation_method": "SELECT blocked_locks.pid AS blocked_pid, blocking_locks.pid AS blocking_pid, blocked_activity.query AS blocked_query FROM pg_locks blocked_locks JOIN pg_locks blocking_locks ON blocked_locks.relation = blocking_locks.relation JOIN pg_stat_activity blocked_activity ON blocked_locks.pid = blocked_activity.pid WHERE NOT blocked_locks.granted;",
+        "why_relevant": "锁等待队列过长，说明阻塞影响范围大"
+      },
+      {
+        "description": "应用监控显示订单提交接口 P99 延迟从 200ms 飙升至 30s",
+        "observation_method": "查看应用 APM 监控或日志中的接口响应时间统计",
+        "why_relevant": "业务层面确认锁等待导致用户可感知的性能问题"
       }
     ]
   },
   {
-    "ticket_id": "DB-013",
+    "ticket_id": "T-0013",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -386,11 +426,16 @@
         "description": "应用代码先更新 inventory 再更新 order_items，另一处先更新 order_items 再更新 inventory",
         "observation_method": "代码审查，检查事务中的表访问顺序",
         "why_relevant": "确认是代码逻辑导致的锁顺序不一致"
+      },
+      {
+        "description": "死锁主要发生在高峰期并发下单时段",
+        "observation_method": "统计死锁发生时间分布: grep 'deadlock detected' postgresql-*.log | cut -d' ' -f1-2 | sort | uniq -c",
+        "why_relevant": "高并发场景下死锁概率增加，需要优化锁策略"
       }
     ]
   },
   {
-    "ticket_id": "DB-014",
+    "ticket_id": "T-0014",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "13.8",
@@ -416,11 +461,16 @@
         "description": "高峰期有 200 个并发会话，每个执行复杂排序查询",
         "observation_method": "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'; 查看慢查询日志",
         "why_relevant": "200 个会话 * 1GB work_mem = 理论 200GB 内存需求，远超物理内存"
+      },
+      {
+        "description": "服务器物理内存 64GB，但 PostgreSQL 理论最大内存需求超过 200GB",
+        "observation_method": "free -h; 计算 shared_buffers + max_connections * work_mem",
+        "why_relevant": "内存配置与硬件资源严重不匹配"
       }
     ]
   },
   {
-    "ticket_id": "DB-015",
+    "ticket_id": "T-0015",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -450,7 +500,7 @@
     ]
   },
   {
-    "ticket_id": "DB-016",
+    "ticket_id": "T-0016",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -476,11 +526,16 @@
         "description": "checkpoint 期间 iostat 显示磁盘 IO 利用率飙升至 100%",
         "observation_method": "iostat -x 1 观察 checkpoint 期间的磁盘 IO",
         "why_relevant": "checkpoint 刷盘操作导致 IO 峰值"
+      },
+      {
+        "description": "应用监控显示每 5 分钟出现一次响应时间峰值",
+        "observation_method": "查看应用 APM 监控，观察响应时间周期性波动",
+        "why_relevant": "checkpoint 与应用性能抖动时间点吻合"
       }
     ]
   },
   {
-    "ticket_id": "DB-017",
+    "ticket_id": "T-0017",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -506,11 +561,16 @@
         "description": "表大小为 500GB，添加 NOT NULL 列需要全表扫描验证",
         "observation_method": "SELECT pg_size_pretty(pg_total_relation_size('target_table'));",
         "why_relevant": "大表 DDL 应避免需要表重写的操作"
+      },
+      {
+        "description": "pg_stat_progress_alter_table 显示操作进度仅完成 30%",
+        "observation_method": "SELECT * FROM pg_stat_progress_alter_table;",
+        "why_relevant": "ALTER TABLE 操作需要很长时间才能完成"
       }
     ]
   },
   {
-    "ticket_id": "DB-018",
+    "ticket_id": "T-0018",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -540,7 +600,7 @@
     ]
   },
   {
-    "ticket_id": "DB-019",
+    "ticket_id": "T-0019",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -570,7 +630,7 @@
     ]
   },
   {
-    "ticket_id": "DB-020",
+    "ticket_id": "T-0020",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "13.8",
@@ -600,7 +660,7 @@
     ]
   },
   {
-    "ticket_id": "DB-021",
+    "ticket_id": "T-0021",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -626,11 +686,16 @@
         "description": "部分子表的外键列未建立索引",
         "observation_method": "检查子表外键列是否有索引: SELECT * FROM pg_indexes WHERE tablename = 'order_items';",
         "why_relevant": "外键列缺少索引，导致每次删除都全表扫描子表"
+      },
+      {
+        "description": "在外键列上添加索引后，删除操作从 10 秒降至 50ms",
+        "observation_method": "CREATE INDEX idx_order_items_order_id ON order_items(order_id); 然后重新测试删除性能",
+        "why_relevant": "确认外键列缺少索引是性能差的主要原因"
       }
     ]
   },
   {
-    "ticket_id": "DB-022",
+    "ticket_id": "T-0022",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -656,11 +721,16 @@
         "description": "启用并行查询后，查询时间从 60 秒降至 15 秒",
         "observation_method": "SET max_parallel_workers_per_gather = 4; 执行查询观察性能",
         "why_relevant": "并行查询可显著提升大表聚合性能"
+      },
+      {
+        "description": "EXPLAIN 显示执行计划未包含 Parallel 相关节点",
+        "observation_method": "EXPLAIN SELECT count(*), sum(amount) FROM large_table;",
+        "why_relevant": "确认查询未使用并行执行"
       }
     ]
   },
   {
-    "ticket_id": "DB-023",
+    "ticket_id": "T-0023",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -686,11 +756,21 @@
         "description": "执行 VACUUM FULL 后，表大小减少 40%",
         "observation_method": "VACUUM FULL VERBOSE tablename; 然后对比表大小",
         "why_relevant": "确认表膨胀问题，但 VACUUM FULL 需要锁表"
+      },
+      {
+        "description": "磁盘空间使用率从 50% 增长到 85%，增速异常",
+        "observation_method": "df -h; 对比历史监控数据",
+        "why_relevant": "磁盘空间增长速度与业务数据增长不匹配，说明存在膨胀"
+      },
+      {
+        "description": "使用 pgstattuple 扩展分析显示表空间利用率仅 45%",
+        "observation_method": "SELECT * FROM pgstattuple('target_table');",
+        "why_relevant": "表空间利用率低说明大量空间被死元组占用"
       }
     ]
   },
   {
-    "ticket_id": "DB-024",
+    "ticket_id": "T-0024",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -716,11 +796,16 @@
         "description": "删除或修复复制槽后，WAL 文件被自动清理",
         "observation_method": "SELECT pg_drop_replication_slot('slot_name'); 或修复订阅端连接",
         "why_relevant": "确认复制槽积压是 WAL 堆积的原因"
+      },
+      {
+        "description": "pg_wal 目录大小超过 200GB，远超正常水平",
+        "observation_method": "du -sh /var/lib/postgresql/14/main/pg_wal/",
+        "why_relevant": "WAL 文件积压导致磁盘空间告警"
       }
     ]
   },
   {
-    "ticket_id": "DB-025",
+    "ticket_id": "T-0025",
     "metadata": {
       "db_type": "PostgreSQL",
       "version": "14.5",
@@ -746,6 +831,21 @@
         "description": "在 Join 列上创建索引后，查询时间降低到 0.5 秒",
         "observation_method": "CREATE INDEX CONCURRENTLY idx_table2_join_col ON table2(join_column); 然后重新执行查询",
         "why_relevant": "确认缺少索引是根因"
+      },
+      {
+        "description": "CPU 使用率在问题查询执行期间持续保持 100%",
+        "observation_method": "top -p $(pgrep -f postgres) 观察 CPU 使用情况",
+        "why_relevant": "CPU 密集型操作，排除 IO 等待问题"
+      },
+      {
+        "description": "pg_stat_user_indexes 显示相关表的索引未被使用",
+        "observation_method": "SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read FROM pg_stat_user_indexes WHERE tablename IN ('table1', 'table2', 'table3') ORDER BY idx_scan;",
+        "why_relevant": "索引扫描次数为 0 说明查询未使用索引"
+      },
+      {
+        "description": "该查询的 shared_blks_read 非常高，表明大量数据从磁盘读取",
+        "observation_method": "SELECT query, shared_blks_hit, shared_blks_read, (shared_blks_read::float / NULLIF(shared_blks_hit + shared_blks_read, 0) * 100)::int as miss_ratio FROM pg_stat_statements ORDER BY shared_blks_read DESC LIMIT 10;",
+        "why_relevant": "缓存命中率低说明查询需要读取大量数据页"
       }
     ]
   }
