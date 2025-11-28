@@ -1777,6 +1777,13 @@ dbdiag/
 │   │   ├── retriever.py          # 现象检索引擎
 │   │   ├── recommender.py        # 下一步推荐引擎
 │   │   └── response_generator.py # 响应生成器
+│   ├── dao/                      # 数据访问层（2025-11-28 新增）
+│   │   ├── __init__.py           # 导出所有 DAO
+│   │   ├── base.py               # BaseDAO 基类
+│   │   ├── phenomenon_dao.py     # PhenomenonDAO
+│   │   ├── ticket_dao.py         # TicketDAO + TicketAnomalyDAO
+│   │   ├── root_cause_dao.py     # RootCauseDAO
+│   │   └── session_dao.py        # SessionDAO
 │   ├── models/                   # 数据模型
 │   │   ├── __init__.py
 │   │   ├── session.py            # 会话数据模型
@@ -1786,7 +1793,7 @@ dbdiag/
 │   │   ├── __init__.py
 │   │   ├── llm_service.py        # LLM API 调用
 │   │   ├── embedding_service.py  # Embedding API 调用
-│   │   └── session_service.py    # 会话持久化
+│   │   └── session_service.py    # 会话服务（向后兼容包装器）
 │   └── utils/                    # 工具函数
 │       ├── __init__.py
 │       ├── config.py             # 配置加载
@@ -2251,3 +2258,123 @@ V2 架构新增单元测试文件：
 | `tests/unit/test_dialogue_manager.py` | PhenomenonDialogueManager + deprecation |
 
 **测试统计**：107 个单元测试全部通过。
+
+---
+
+## 十五、DAO 数据访问层（2025-11-28）
+
+### 15.1 架构概述
+
+为了集中管理数据库访问、减少代码重复，系统引入了 DAO（Data Access Object）层：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      业务逻辑层                              │
+│  (core/dialogue_manager, hypothesis_tracker, recommender)   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      DAO 数据访问层                          │
+│                                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │ PhenomenonDAO│  │  TicketDAO  │  │ TicketAnomalyDAO    │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+│                                                             │
+│  ┌─────────────┐  ┌─────────────┐                          │
+│  │ RootCauseDAO│  │ SessionDAO  │                          │
+│  └─────────────┘  └─────────────┘                          │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                     BaseDAO                          │   │
+│  │  - get_connection(): 连接上下文管理器               │   │
+│  │  - get_cursor(): 游标上下文管理器                   │   │
+│  │  - db_path: 数据库路径（支持默认值）                │   │
+│  └─────────────────────────────────────────────────────┘   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      SQLite 数据库                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 15.2 DAO 类说明
+
+| DAO 类 | 职责 | 主要方法 |
+|--------|------|----------|
+| `BaseDAO` | 基类，提供连接管理 | `get_connection()`, `get_cursor()` |
+| `PhenomenonDAO` | phenomena 表访问 | `get_by_id()`, `get_by_ids()`, `get_all_with_embedding()`, `dict_to_model()` |
+| `TicketDAO` | tickets 表访问 | `get_by_root_cause_id()`, `get_by_phenomenon_id()` |
+| `TicketAnomalyDAO` | ticket_anomalies 表访问 | `get_phenomena_by_root_cause_id()` |
+| `RootCauseDAO` | root_causes 表访问 | `get_description()`, `get_solution()` |
+| `SessionDAO` | sessions 表访问 | `create()`, `get()`, `update()`, `delete()`, `list_recent()` |
+
+### 15.3 BaseDAO 设计
+
+```python
+class BaseDAO:
+    """数据访问对象基类"""
+
+    def __init__(self, db_path: Optional[str] = None):
+        if db_path is None:
+            project_root = Path(__file__).parent.parent.parent
+            db_path = str(project_root / "data" / "tickets.db")
+        self.db_path = db_path
+
+    @contextmanager
+    def get_connection(self, row_factory: bool = True):
+        """获取数据库连接（上下文管理器）"""
+        conn = sqlite3.connect(self.db_path)
+        if row_factory:
+            conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def get_cursor(self, row_factory: bool = True):
+        """获取数据库游标（上下文管理器）"""
+        with self.get_connection(row_factory) as conn:
+            cursor = conn.cursor()
+            yield conn, cursor
+```
+
+### 15.4 使用示例
+
+```python
+# 导入 DAO
+from dbdiag.dao import PhenomenonDAO, RootCauseDAO
+
+# 初始化
+phenomenon_dao = PhenomenonDAO(db_path)
+root_cause_dao = RootCauseDAO(db_path)
+
+# 使用
+row_dict = phenomenon_dao.get_by_id("P-0001")
+if row_dict:
+    phenomenon = phenomenon_dao.dict_to_model(row_dict)
+
+description = root_cause_dao.get_description("RC-0001")
+```
+
+### 15.5 向后兼容性
+
+`SessionService` 保留为向后兼容包装器，内部委托给 `SessionDAO`：
+
+```python
+class SessionService:
+    """会话服务（向后兼容包装器）"""
+
+    def __init__(self, db_path: Optional[str] = None):
+        self._dao = SessionDAO(db_path)
+        self.db_path = self._dao.db_path
+
+    def create_session(self, user_problem: str) -> SessionState:
+        return self._dao.create(user_problem)
+
+    # ... 其他方法委托给 self._dao
+```
+
+建议新代码直接使用 `SessionDAO`。

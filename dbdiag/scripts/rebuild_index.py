@@ -21,6 +21,7 @@ from dbdiag.utils.config import load_config
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.services.llm_service import LLMService
 from dbdiag.utils.vector_utils import serialize_f32, cosine_similarity
+from dbdiag.dao import RawAnomalyDAO
 
 
 def rebuild_index(
@@ -54,40 +55,39 @@ def rebuild_index(
     embedding_service = EmbeddingService(config)
     llm_service = LLMService(config)
 
+    # 使用 DAO 读取原始异常
+    raw_anomaly_dao = RawAnomalyDAO(db_path)
+
+    # 1. 读取原始异常
+    print("\n[1/6] 读取原始异常...")
+    raw_anomalies = raw_anomaly_dao.get_all()
+    print(f"  共 {len(raw_anomalies)} 条原始异常")
+
+    if not raw_anomalies:
+        print("  [WARN] 没有原始异常数据，跳过重建")
+        return
+
+    # 2. 生成向量
+    print("\n[2/6] 生成向量...")
+    descriptions = [a["description"] for a in raw_anomalies]
+    embeddings = embedding_service.encode_batch(descriptions)
+
+    for i, anomaly in enumerate(raw_anomalies):
+        anomaly["embedding"] = embeddings[i]
+
+    print(f"  生成了 {len(embeddings)} 个向量")
+
+    # 3. 向量聚类
+    print("\n[3/6] 向量聚类...")
+    clusters = cluster_by_similarity(raw_anomalies, similarity_threshold)
+    print(f"  聚类结果: {len(raw_anomalies)} 个异常 -> {len(clusters)} 个聚类")
+
+    # 批量写入操作使用直接 sqlite3 连接（需要事务控制）
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     try:
-        # 1. 读取原始异常
-        print("\n[1/6] 读取原始异常...")
-        cursor.execute("""
-            SELECT id, ticket_id, anomaly_index, description, observation_method, why_relevant
-            FROM raw_anomalies
-            ORDER BY ticket_id, anomaly_index
-        """)
-        raw_anomalies = [dict(row) for row in cursor.fetchall()]
-        print(f"  共 {len(raw_anomalies)} 条原始异常")
-
-        if not raw_anomalies:
-            print("  [WARN] 没有原始异常数据，跳过重建")
-            return
-
-        # 2. 生成向量
-        print("\n[2/6] 生成向量...")
-        descriptions = [a["description"] for a in raw_anomalies]
-        embeddings = embedding_service.encode_batch(descriptions)
-
-        for i, anomaly in enumerate(raw_anomalies):
-            anomaly["embedding"] = embeddings[i]
-
-        print(f"  生成了 {len(embeddings)} 个向量")
-
-        # 3. 向量聚类
-        print("\n[3/6] 向量聚类...")
-        clusters = cluster_by_similarity(raw_anomalies, similarity_threshold)
-        print(f"  聚类结果: {len(raw_anomalies)} 个异常 -> {len(clusters)} 个聚类")
-
         # 4. 清除旧数据
         print("\n[4/6] 清除旧数据...")
         cursor.execute("DELETE FROM ticket_anomalies")
