@@ -27,6 +27,13 @@ def interactive_cli():
     cli_main()
 
 
+@main.command("chat")
+def rich_cli():
+    """启动 Rich CLI 诊断（实验性，美化输出）"""
+    from dbdiag.cli.rich_cli import main as rich_main
+    rich_main()
+
+
 @main.command("api")
 @click.option(
     "--host",
