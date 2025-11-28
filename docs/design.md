@@ -1760,6 +1760,16 @@ dbdiag/
 │   │   ├── main.py               # FastAPI 主服务
 │   │   ├── chat.py               # 对话接口
 │   │   └── session.py            # 会话管理接口
+│   ├── cli/                      # 命令行界面
+│   │   ├── __init__.py
+│   │   ├── main.py               # CLI 主程序
+│   │   └── formatter.py          # 输出格式化
+│   ├── scripts/                  # 初始化脚本
+│   │   ├── __init__.py
+│   │   ├── init_db.py            # 初始化数据库
+│   │   ├── import_tickets.py     # 数据导入脚本
+│   │   ├── rebuild_index.py      # 重建索引（phenomena、root_causes）
+│   │   └── visualize_knowledge_graph.py  # 知识图谱可视化
 │   ├── core/                     # 核心逻辑
 │   │   ├── __init__.py
 │   │   ├── dialogue_manager.py   # 对话管理器
@@ -1781,15 +1791,6 @@ dbdiag/
 │       ├── __init__.py
 │       ├── config.py             # 配置加载
 │       └── vector_utils.py       # 向量计算工具
-│   ├── cli/                      # 命令行界面
-│   │   ├── __init__.py
-│   │   ├── main.py               # CLI 主程序
-│   │   └── formatter.py          # 输出格式化
-├── scripts/                      # 初始化脚本
-│   ├── init_db.py                # 初始化数据库
-│   ├── import_tickets.py         # 数据导入脚本
-│   ├── rebuild_index.py          # 重建索引（phenomena、root_causes）
-│   └── visualize_knowledge_graph.py  # 知识图谱可视化
 ├── tests/                        # 测试
 │   ├── unit/                     # 单元测试
 │   └── e2e/                      # 端到端测试

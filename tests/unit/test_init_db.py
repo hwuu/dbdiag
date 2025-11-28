@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.init_db import init_database
+from dbdiag.scripts.init_db import init_database
 
 
 class TestInitDatabase:

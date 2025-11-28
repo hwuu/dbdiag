@@ -57,7 +57,7 @@ def serve(host: str, port: int):
 )
 def init(db: str):
     """初始化数据库（仅创建表结构，不导入数据）"""
-    from scripts.init_db import init_database
+    from dbdiag.scripts.init_db import init_database
 
     try:
         init_database(db)
@@ -81,7 +81,7 @@ def init(db: str):
 )
 def import_data(data: str, db: str):
     """导入工单数据到数据库"""
-    from scripts.import_tickets import import_tickets_v2
+    from dbdiag.scripts.import_tickets import import_tickets_v2
 
     try:
         import_tickets_v2(data, db)
@@ -104,7 +104,7 @@ def import_data(data: str, db: str):
 )
 def rebuild_index(db: str, config: str):
     """重建向量索引（生成 phenomena、root_causes 和 ticket_anomalies）"""
-    from scripts.rebuild_index import rebuild_index as do_rebuild
+    from dbdiag.scripts.rebuild_index import rebuild_index as do_rebuild
 
     try:
         do_rebuild(db, config)
@@ -138,7 +138,7 @@ def rebuild_index(db: str, config: str):
 )
 def visualize(db: str, output: str, layout: str, open_browser: bool):
     """生成知识图谱可视化（HTML 格式）"""
-    from scripts.visualize_knowledge_graph import create_knowledge_graph
+    from dbdiag.scripts.visualize_knowledge_graph import create_knowledge_graph
     import webbrowser
 
     db_path = Path(db)
