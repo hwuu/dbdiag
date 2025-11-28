@@ -5,12 +5,12 @@
 V2 架构：使用 PhenomenonDialogueManager 进行现象级诊断。
 """
 import sys
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from dbdiag.cli.formatter import TextFormatter
 from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
+from dbdiag.dao import RootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -40,6 +40,9 @@ class CLI:
         # 格式化器
         self.formatter = TextFormatter()
 
+        # DAO
+        self._root_cause_dao = RootCauseDAO(self.db_path)
+
         # 当前会话 ID
         self.session_id: Optional[str] = None
 
@@ -52,17 +55,7 @@ class CLI:
 
     def _get_root_cause_description(self, root_cause_id: str) -> str:
         """根据 ID 获取根因描述"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        try:
-            cursor.execute(
-                "SELECT description FROM root_causes WHERE root_cause_id = ?",
-                (root_cause_id,),
-            )
-            row = cursor.fetchone()
-            return row[0] if row else root_cause_id
-        finally:
-            conn.close()
+        return self._root_cause_dao.get_description(root_cause_id)
 
     def run(self):
         """运行 CLI 主循环"""

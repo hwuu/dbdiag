@@ -2,11 +2,10 @@
 
 生成用户可读的响应，并附带工单引用
 """
-import sqlite3
-import json
 from typing import List, Dict, Any
 
 from dbdiag.models import SessionState
+from dbdiag.dao import PhenomenonDAO, TicketDAO, RootCauseDAO
 from dbdiag.services.llm_service import LLMService
 
 
@@ -23,6 +22,9 @@ class ResponseGenerator:
         """
         self.db_path = db_path
         self.llm_service = llm_service
+        self._phenomenon_dao = PhenomenonDAO(db_path)
+        self._ticket_dao = TicketDAO(db_path)
+        self._root_cause_dao = RootCauseDAO(db_path)
 
     def _get_phenomenon_details(self, phenomenon_ids: List[str]) -> List[Dict[str, str]]:
         """
@@ -34,26 +36,7 @@ class ResponseGenerator:
         Returns:
             现象详情列表
         """
-        if not phenomenon_ids:
-            return []
-
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        try:
-            placeholders = ",".join("?" * len(phenomenon_ids))
-            cursor.execute(
-                f"""
-                SELECT phenomenon_id, description, observation_method
-                FROM phenomena
-                WHERE phenomenon_id IN ({placeholders})
-                """,
-                phenomenon_ids,
-            )
-            return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
+        return self._phenomenon_dao.get_by_ids(phenomenon_ids)
 
     def generate_response(
         self, session: SessionState, recommendation: Dict[str, Any]
@@ -246,26 +229,7 @@ class ResponseGenerator:
         Returns:
             引用列表
         """
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT ticket_id, description, root_cause, solution
-                FROM tickets
-                WHERE root_cause_id = ?
-                LIMIT 3
-                """,
-                (root_cause_id,),
-            )
-
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-
-        finally:
-            conn.close()
+        return self._ticket_dao.get_by_root_cause_id(root_cause_id, limit=3)
 
     def _get_solution_for_root_cause(self, root_cause_id: str) -> str:
         """
@@ -277,27 +241,7 @@ class ResponseGenerator:
         Returns:
             解决方案文本
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT solution
-                FROM root_causes
-                WHERE root_cause_id = ?
-                """,
-                (root_cause_id,),
-            )
-
-            row = cursor.fetchone()
-            if row and row[0]:
-                return row[0]
-
-            return "暂无具体解决方案，请参考相关工单。"
-
-        finally:
-            conn.close()
+        return self._root_cause_dao.get_solution(root_cause_id)
 
     def _get_root_cause_description(self, root_cause_id: str) -> str:
         """
@@ -309,24 +253,4 @@ class ResponseGenerator:
         Returns:
             根因描述文本
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT description
-                FROM root_causes
-                WHERE root_cause_id = ?
-                """,
-                (root_cause_id,),
-            )
-
-            row = cursor.fetchone()
-            if row and row[0]:
-                return row[0]
-
-            return root_cause_id  # 找不到时返回 ID
-
-        finally:
-            conn.close()
+        return self._root_cause_dao.get_description(root_cause_id)

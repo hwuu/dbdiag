@@ -2,8 +2,6 @@
 
 整合所有组件，管理对话流程
 """
-import json
-import sqlite3
 import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -15,6 +13,7 @@ from dbdiag.models import (
 from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
 from dbdiag.core.recommender import PhenomenonRecommendationEngine
 from dbdiag.core.response_generator import ResponseGenerator
+from dbdiag.dao import PhenomenonDAO
 from dbdiag.services.session_service import SessionService
 from dbdiag.services.llm_service import LLMService
 
@@ -54,6 +53,7 @@ class PhenomenonDialogueManager:
         )
         self.recommender = PhenomenonRecommendationEngine(db_path, llm_service)
         self.response_generator = ResponseGenerator(db_path, llm_service)
+        self._phenomenon_dao = PhenomenonDAO(db_path)
 
     def _report_progress(self, message: str) -> None:
         """报告进度"""
@@ -348,39 +348,10 @@ class PhenomenonDialogueManager:
 
     def _get_phenomenon_by_id(self, phenomenon_id: str) -> Optional[Phenomenon]:
         """根据 ID 获取现象"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT
-                    phenomenon_id, description, observation_method,
-                    source_anomaly_ids, cluster_size
-                FROM phenomena
-                WHERE phenomenon_id = ?
-                """,
-                (phenomenon_id,),
-            )
-            row = cursor.fetchone()
-
-            if row:
-                source_ids = row["source_anomaly_ids"]
-                if isinstance(source_ids, str):
-                    source_ids = json.loads(source_ids)
-
-                return Phenomenon(
-                    phenomenon_id=row["phenomenon_id"],
-                    description=row["description"],
-                    observation_method=row["observation_method"],
-                    source_anomaly_ids=source_ids,
-                    cluster_size=row["cluster_size"],
-                )
-
-            return None
-        finally:
-            conn.close()
+        row_dict = self._phenomenon_dao.get_by_id(phenomenon_id)
+        if row_dict:
+            return self._phenomenon_dao.dict_to_model(row_dict)
+        return None
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
