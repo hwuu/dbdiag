@@ -2,12 +2,12 @@
 
 基于当前假设状态决定下一步行动
 """
-from typing import Optional, List, Dict
-from collections import defaultdict
+from typing import Optional, List, Dict, Set
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
 from dbdiag.dao import PhenomenonDAO, RootCauseDAO, TicketAnomalyDAO
 from dbdiag.services.llm_service import LLMService
+from dbdiag.utils.config import RecommenderConfig
 
 
 class PhenomenonRecommendationEngine:
@@ -16,19 +16,28 @@ class PhenomenonRecommendationEngine:
     使用 phenomena 表进行下一步推荐。
     """
 
-    def __init__(self, db_path: str, llm_service: LLMService):
+    def __init__(
+        self,
+        db_path: str,
+        llm_service: LLMService,
+        config: RecommenderConfig = None,
+    ):
         """
         初始化推荐引擎
 
         Args:
             db_path: 数据库路径
             llm_service: LLM 服务实例（单例）
+            config: 推荐引擎配置
         """
         self.db_path = db_path
         self.llm_service = llm_service
+        self.config = config or RecommenderConfig()
         self._phenomenon_dao = PhenomenonDAO(db_path)
         self._root_cause_dao = RootCauseDAO(db_path)
         self._ticket_anomaly_dao = TicketAnomalyDAO(db_path)
+        # 缓存 max_ticket_count
+        self._max_ticket_count: Optional[int] = None
 
     def recommend_next_action(
         self, session: SessionState
@@ -47,20 +56,20 @@ class PhenomenonRecommendationEngine:
 
         top_hypothesis = session.active_hypotheses[0]
 
-        # 阶段 1: 高置信度 -> 确认根因（阈值 80%）
-        if top_hypothesis.confidence >= 0.80:
+        # 阶段 1: 高置信度 -> 确认根因
+        if top_hypothesis.confidence >= self.config.high_confidence_threshold:
             return self._generate_root_cause_confirmation(session, top_hypothesis)
 
         # 阶段 2 & 3: 收集多个现象进行批量推荐
         phenomena_to_recommend = self._collect_phenomena_for_recommendation(
-            session, max_count=3
+            session, max_count=self.config.recommend_top_n
         )
 
         if phenomena_to_recommend:
             return self._generate_phenomena_recommendation(session, phenomena_to_recommend)
 
         # 阶段 4: 没有更多现象可推荐，但置信度中等 -> 也确认根因
-        if top_hypothesis.confidence >= 0.50:
+        if top_hypothesis.confidence >= self.config.medium_confidence_threshold:
             return self._generate_root_cause_confirmation(session, top_hypothesis)
 
         # 兜底：询问关键信息
@@ -79,7 +88,7 @@ class PhenomenonRecommendationEngine:
         """生成根因确认响应"""
         return {
             "action": "confirm_root_cause",
-            "root_cause": hypothesis.root_cause_id,  # 暂时 root_cause_id 存储的是文本
+            "root_cause": hypothesis.root_cause_id,
             "confidence": hypothesis.confidence,
             "supporting_phenomenon_ids": hypothesis.supporting_phenomenon_ids,
             "supporting_ticket_ids": hypothesis.supporting_ticket_ids,
@@ -93,10 +102,11 @@ class PhenomenonRecommendationEngine:
         收集多个现象进行批量推荐
 
         策略：
-        1. 从每个活跃假设中收集未确认/未否定的现象
-        2. 按假设置信度权重排序（与高置信度假设相关的现象优先）
-        3. 去重并返回 top-N
-        4. 如果检索到的现象不足，从数据库补充 top 假设的剩余关联现象
+        1. 从活跃假设获取相关根因集合（已在 hypothesis_tracker 中检索过）
+        2. 扩展：获取这些根因的所有关联现象
+        3. 过滤：排除已确认/已否认的现象
+        4. 打分：计算每个现象的推荐得分
+        5. 返回 top-n 现象
 
         Args:
             session: 会话状态
@@ -105,236 +115,258 @@ class PhenomenonRecommendationEngine:
         Returns:
             现象信息列表，每项包含 phenomenon 和 related_hypotheses
         """
+        if not session.active_hypotheses:
+            return []
+
         confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
-        denied_ids = set(session.denied_phenomenon_ids)  # 排除被否定的现象
+        denied_ids = set(session.denied_phenomenon_ids)
 
-        # 收集所有候选现象及其权重
-        phenomenon_scores: Dict[str, Dict] = {}
+        # 1. 从活跃假设获取相关根因集合
+        relevant_root_causes = {h.root_cause_id for h in session.active_hypotheses}
 
-        for hyp in session.active_hypotheses[:5]:  # 考虑更多假设
-            for phenomenon_id in hyp.supporting_phenomenon_ids:
-                if phenomenon_id in confirmed_ids:
-                    continue  # 跳过已确认的
-                if phenomenon_id in denied_ids:
-                    continue  # 跳过被否定的
-
-                if phenomenon_id not in phenomenon_scores:
-                    phenomenon = self._get_phenomenon_by_id(phenomenon_id)
-                    if phenomenon:
-                        phenomenon_scores[phenomenon_id] = {
-                            "phenomenon": phenomenon,
-                            "weight": 0.0,
-                            "max_confidence": 0.0,  # 关联假设的最高置信度
-                            "hypothesis_count": 0,
-                            "related_hypotheses": [],  # 关联的假设
-                            "from_db": False,  # 标记是否来自数据库补充
-                        }
-
-                if phenomenon_id in phenomenon_scores:
-                    # 权重 = 假设置信度累加
-                    phenomenon_scores[phenomenon_id]["weight"] += hyp.confidence
-                    phenomenon_scores[phenomenon_id]["hypothesis_count"] += 1
-                    # 记录最高置信度
-                    phenomenon_scores[phenomenon_id]["max_confidence"] = max(
-                        phenomenon_scores[phenomenon_id]["max_confidence"],
-                        hyp.confidence
-                    )
-                    # 记录关联的假设
-                    phenomenon_scores[phenomenon_id]["related_hypotheses"].append({
-                        "root_cause": hyp.root_cause_id,  # 暂时 root_cause_id 存储的是文本
-                        "confidence": hyp.confidence,
-                    })
-
-        # 如果检索到的现象不足，从数据库补充 top 假设的剩余关联现象
-        if len(phenomenon_scores) < max_count and session.active_hypotheses:
-            top_hyp = session.active_hypotheses[0]
-            # 从数据库获取 top 假设的全部关联现象
-            db_phenomenon_ids = self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(
-                top_hyp.root_cause_id
+        # 2. 扩展：获取这些根因的所有关联现象
+        candidate_phenomenon_ids: Set[str] = set()
+        for root_cause_id in relevant_root_causes:
+            phenomenon_ids = self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(
+                root_cause_id
             )
-            for phenomenon_id in db_phenomenon_ids:
-                if phenomenon_id in confirmed_ids:
-                    continue
-                if phenomenon_id in denied_ids:
-                    continue
-                if phenomenon_id in phenomenon_scores:
-                    continue  # 已经在列表中
+            candidate_phenomenon_ids.update(phenomenon_ids)
 
-                phenomenon = self._get_phenomenon_by_id(phenomenon_id)
-                if phenomenon:
-                    phenomenon_scores[phenomenon_id] = {
-                        "phenomenon": phenomenon,
-                        "weight": top_hyp.confidence * 0.5,  # 数据库补充的权重降低
-                        "max_confidence": top_hyp.confidence,
-                        "hypothesis_count": 1,
-                        "related_hypotheses": [{
-                            "root_cause": top_hyp.root_cause_id,
-                            "confidence": top_hyp.confidence,
-                        }],
-                        "from_db": True,  # 标记来自数据库补充
-                    }
+        # 3. 过滤：排除已确认/已否认的现象
+        candidate_phenomenon_ids -= confirmed_ids
+        candidate_phenomenon_ids -= denied_ids
 
-        # 排序：优先推荐与高置信度假设相关的现象
-        ranked = sorted(
-            phenomenon_scores.values(),
-            key=lambda x: (
-                not x.get("from_db", False),  # 检索到的优先于数据库补充的
-                x["max_confidence"],    # 关联假设的最高置信度优先
-                x["weight"],            # 权重高的优先（被多个假设支持）
-            ),
-            reverse=True,
-        )
+        if not candidate_phenomenon_ids:
+            return []
 
-        return ranked[:max_count]
-
-    def _find_discriminating_phenomenon(
-        self,
-        hypothesis1: Hypothesis,
-        hypothesis2: Optional[Hypothesis],
-        session: SessionState,
-    ) -> Optional[Phenomenon]:
-        """
-        找到能区分两个假设的现象
-
-        Args:
-            hypothesis1: 假设 1
-            hypothesis2: 假设 2（可选）
-            session: 会话状态
-
-        Returns:
-            区分性现象
-        """
-        confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
-
-        if not hypothesis2:
-            return self._get_next_unconfirmed_phenomenon(hypothesis1, session)
-
-        # 找到 hypothesis1 独有的现象
-        unique_phenomena_h1 = set(hypothesis1.supporting_phenomenon_ids) - set(
-            hypothesis2.supporting_phenomenon_ids
-        )
-
-        # 选择还未确认的现象
-        for phenomenon_id in unique_phenomena_h1:
-            if phenomenon_id not in confirmed_ids:
-                phenomenon = self._get_phenomenon_by_id(phenomenon_id)
-                if phenomenon and not self._is_similar_to_confirmed(phenomenon, session):
-                    return phenomenon
-
-        return self._get_next_unconfirmed_phenomenon(hypothesis1, session)
-
-    def _find_common_recommended_phenomena(
-        self, hypotheses: List[Hypothesis], session: SessionState
-    ) -> List[Phenomenon]:
-        """
-        从多个假设中找到共同推荐的现象（投票）
-
-        Args:
-            hypotheses: 假设列表
-            session: 会话状态
-
-        Returns:
-            按投票数排序的现象列表
-        """
-        phenomenon_votes = defaultdict(lambda: {"phenomenon": None, "weighted_votes": 0.0})
-
-        for hyp in hypotheses:
-            next_phenomenon = self._get_next_unconfirmed_phenomenon(hyp, session)
-            if not next_phenomenon:
+        # 4. 打分：计算每个现象的推荐得分
+        scored_phenomena = []
+        for phenomenon_id in candidate_phenomenon_ids:
+            phenomenon = self._get_phenomenon_by_id(phenomenon_id)
+            if not phenomenon:
                 continue
 
-            phenomenon_id = next_phenomenon.phenomenon_id
+            # 获取现象关联的根因
+            related_root_cause_ids = self._ticket_anomaly_dao.get_root_causes_by_phenomenon_id(
+                phenomenon_id
+            )
 
-            if phenomenon_votes[phenomenon_id]["phenomenon"] is None:
-                phenomenon_votes[phenomenon_id]["phenomenon"] = next_phenomenon
+            # 计算得分
+            score = self._calculate_phenomenon_score(
+                phenomenon_id=phenomenon_id,
+                related_root_cause_ids=related_root_cause_ids,
+                session=session,
+            )
 
-            phenomenon_votes[phenomenon_id]["weighted_votes"] += hyp.confidence
+            # 构建关联假设信息
+            related_hypotheses = self._build_related_hypotheses(
+                related_root_cause_ids, session
+            )
 
-        ranked = sorted(
-            phenomenon_votes.values(),
-            key=lambda x: x["weighted_votes"],
-            reverse=True,
-        )
+            scored_phenomena.append({
+                "phenomenon": phenomenon,
+                "score": score,
+                "related_hypotheses": related_hypotheses,
+            })
 
-        return [v["phenomenon"] for v in ranked if v["phenomenon"]]
+        # 5. 排序并返回 top-n
+        scored_phenomena.sort(key=lambda x: x["score"], reverse=True)
+        return scored_phenomena[:max_count]
 
-    def _get_next_unconfirmed_phenomenon(
-        self, hypothesis: Hypothesis, session: SessionState
-    ) -> Optional[Phenomenon]:
-        """获取假设的下一个未确认现象"""
-        confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
-
-        if hypothesis.next_recommended_phenomenon_id:
-            if hypothesis.next_recommended_phenomenon_id not in confirmed_ids:
-                phenomenon = self._get_phenomenon_by_id(hypothesis.next_recommended_phenomenon_id)
-                if phenomenon and not self._is_similar_to_confirmed(phenomenon, session):
-                    return phenomenon
-
-        for phenomenon_id in hypothesis.supporting_phenomenon_ids:
-            if phenomenon_id not in confirmed_ids:
-                phenomenon = self._get_phenomenon_by_id(phenomenon_id)
-                if phenomenon and not self._is_similar_to_confirmed(phenomenon, session):
-                    return phenomenon
-
-        return None
-
-    def _is_similar_to_confirmed(
-        self, candidate: Phenomenon, session: SessionState
-    ) -> bool:
+    def _calculate_phenomenon_score(
+        self,
+        phenomenon_id: str,
+        related_root_cause_ids: Set[str],
+        session: SessionState,
+    ) -> float:
         """
-        判断候选现象是否与已确认现象语义相似
+        计算现象的推荐得分
+
+        score = w1 * popularity + w2 * specificity + w3 * hypothesis_priority + w4 * information_gain
 
         Args:
-            candidate: 候选现象
+            phenomenon_id: 现象 ID
+            related_root_cause_ids: 关联的根因 ID 集合
             session: 会话状态
 
         Returns:
-            True 如果相似，False 否则
+            推荐得分
         """
-        if not session.confirmed_phenomena:
-            return False
+        weights = self.config.weights
 
-        confirmed_descriptions = []
-        for cp in session.confirmed_phenomena:
-            phenomenon = self._get_phenomenon_by_id(cp.phenomenon_id)
-            if phenomenon:
-                confirmed_descriptions.append(phenomenon.description)
+        popularity = self._calculate_popularity(related_root_cause_ids)
+        specificity = self._calculate_specificity(related_root_cause_ids)
+        hypothesis_priority = self._calculate_hypothesis_priority(
+            related_root_cause_ids, session
+        )
+        information_gain = self._calculate_information_gain(
+            phenomenon_id, related_root_cause_ids, session
+        )
 
-        if not confirmed_descriptions:
-            return False
+        score = (
+            weights.popularity * popularity +
+            weights.specificity * specificity +
+            weights.hypothesis_priority * hypothesis_priority +
+            weights.information_gain * information_gain
+        )
 
-        system_prompt = """你是一个数据库诊断专家。判断两个现象是否语义相似。
+        return score
 
-语义相似的标准：
-1. 检查的是同一个系统指标或现象
-2. 即使具体的 SQL 不同，但目的相同
-3. 即使阈值不同，但检查的对象相同
+    def _calculate_popularity(self, related_root_cause_ids: Set[str]) -> float:
+        """
+        计算流行度：关联根因中最高的流行度
 
-输出格式: 只输出 "yes" 或 "no"
-"""
+        popularity = max(ticket_count(r) / max_ticket_count for r in R_p)
+        """
+        if not related_root_cause_ids:
+            return 0.0
 
-        user_prompt = f"""候选现象: {candidate.description}
+        max_ticket_count = self._get_max_ticket_count()
+        if max_ticket_count == 0:
+            return 0.0
 
-已确认现象:
-{chr(10).join([f"- {desc}" for desc in confirmed_descriptions])}
+        max_popularity = 0.0
+        for root_cause_id in related_root_cause_ids:
+            ticket_count = self._root_cause_dao.get_ticket_count(root_cause_id)
+            popularity = ticket_count / max_ticket_count
+            max_popularity = max(max_popularity, popularity)
 
-候选现象是否与任一已确认现象语义相似？"""
+        return max_popularity
 
-        try:
-            response = self.llm_service.generate_simple(
-                user_prompt,
-                system_prompt=system_prompt,
-            )
-            return response.strip().lower() in ["yes", "是"]
+    def _calculate_specificity(self, related_root_cause_ids: Set[str]) -> float:
+        """
+        计算特异性：关联根因越少，特异性越高
 
-        except Exception:
-            candidate_keywords = set(candidate.description.lower().split())
-            for desc in confirmed_descriptions:
-                desc_keywords = set(desc.lower().split())
-                overlap = len(candidate_keywords & desc_keywords)
-                if overlap >= len(candidate_keywords) * 0.5:
-                    return True
-            return False
+        specificity = 1 / len(R_p)
+        """
+        if not related_root_cause_ids:
+            return 0.0
+
+        return 1.0 / len(related_root_cause_ids)
+
+    def _calculate_hypothesis_priority(
+        self, related_root_cause_ids: Set[str], session: SessionState
+    ) -> float:
+        """
+        计算假设优先级：关联根因中最高的置信度
+
+        hypothesis_priority = max(confidence(r) for r in R_p)
+        """
+        if not related_root_cause_ids or not session.active_hypotheses:
+            return 0.0
+
+        # 构建根因 -> 置信度映射
+        confidence_map = {
+            h.root_cause_id: h.confidence for h in session.active_hypotheses
+        }
+
+        max_priority = 0.0
+        for root_cause_id in related_root_cause_ids:
+            confidence = confidence_map.get(root_cause_id, 0.0)
+            max_priority = max(max_priority, confidence)
+
+        return max_priority
+
+    def _calculate_information_gain(
+        self,
+        phenomenon_id: str,
+        related_root_cause_ids: Set[str],
+        session: SessionState,
+    ) -> float:
+        """
+        计算信息增益：确认收益 + 区分能力
+
+        information_gain = 0.6 * confirmation_gain + 0.4 * discrimination_power
+        """
+        confirmation_gain = self._calculate_confirmation_gain(
+            related_root_cause_ids, session
+        )
+        discrimination_power = self._calculate_discrimination_power(
+            related_root_cause_ids, session
+        )
+
+        return (
+            self.config.confirmation_gain_weight * confirmation_gain +
+            self.config.discrimination_power_weight * discrimination_power
+        )
+
+    def _calculate_confirmation_gain(
+        self, related_root_cause_ids: Set[str], session: SessionState
+    ) -> float:
+        """
+        计算确认收益：确认该现象对 top 假设的置信度提升空间
+
+        如果与 top 假设相关：return 1 - confirmed / total
+        否则：return 0
+        """
+        if not session.active_hypotheses:
+            return 0.0
+
+        top_hypothesis = session.active_hypotheses[0]
+
+        if top_hypothesis.root_cause_id not in related_root_cause_ids:
+            return 0.0
+
+        # 获取 top 假设的所有关联现象
+        all_phenomena = self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(
+            top_hypothesis.root_cause_id
+        )
+        total = len(all_phenomena) if all_phenomena else 1
+
+        # 已确认的现象中，有多少与 top 假设相关
+        confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
+        confirmed_relevant = len(confirmed_ids & all_phenomena)
+
+        # 还有多少增长空间
+        return 1.0 - (confirmed_relevant / total)
+
+    def _calculate_discrimination_power(
+        self, related_root_cause_ids: Set[str], session: SessionState
+    ) -> float:
+        """
+        计算区分能力：该现象能否有效区分 top-1 和 top-2 假设
+
+        - 只与 top1 相关：1.0（完美区分）
+        - 只与 top2 相关：0.8（可排除）
+        - 都相关：0.2（区分度低）
+        - 都不相关：0.1
+        """
+        if len(session.active_hypotheses) < 2:
+            return 0.0
+
+        top1 = session.active_hypotheses[0]
+        top2 = session.active_hypotheses[1]
+
+        top1_related = top1.root_cause_id in related_root_cause_ids
+        top2_related = top2.root_cause_id in related_root_cause_ids
+
+        if top1_related and not top2_related:
+            return 1.0  # 只与 top1 相关，完美区分
+        elif not top1_related and top2_related:
+            return 0.8  # 只与 top2 相关，可排除
+        elif top1_related and top2_related:
+            return 0.2  # 都相关，区分度低
+        else:
+            return 0.1  # 都不相关
+
+    def _build_related_hypotheses(
+        self, related_root_cause_ids: Set[str], session: SessionState
+    ) -> List[Dict]:
+        """构建关联假设信息列表"""
+        related_hypotheses = []
+        for h in session.active_hypotheses:
+            if h.root_cause_id in related_root_cause_ids:
+                related_hypotheses.append({
+                    "root_cause": h.root_cause_id,
+                    "confidence": h.confidence,
+                })
+        return related_hypotheses
+
+    def _get_max_ticket_count(self) -> int:
+        """获取最大 ticket 数量（带缓存）"""
+        if self._max_ticket_count is None:
+            self._max_ticket_count = self._root_cause_dao.get_max_ticket_count()
+        return self._max_ticket_count
 
     def _get_root_cause_description(self, root_cause_id: str) -> str:
         """根据 ID 获取根因描述"""
@@ -381,16 +413,6 @@ class PhenomenonRecommendationEngine:
             "phenomena_with_reasons": phenomena_with_reasons,  # 新增：包含原因
             "phenomenon": phenomena[0] if phenomena else None,  # 兼容旧接口
             "message": f"建议确认以下 {len(phenomena)} 个现象",
-        }
-
-    def _generate_phenomenon_recommendation(
-        self, session: SessionState, phenomenon: Phenomenon
-    ) -> Dict:
-        """生成现象推荐响应"""
-        return {
-            "action": "recommend_phenomenon",
-            "phenomenon": phenomenon,
-            "message": f"建议确认以下现象：\n\n现象描述：{phenomenon.description}\n\n观察方法：\n{phenomenon.observation_method}",
         }
 
     def _ask_for_key_symptom(

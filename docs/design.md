@@ -591,7 +591,122 @@ def compute_confidence(root_cause, confirmed_facts, confirmed_phenomena, denied_
 
 **职责**: 根据当前假设状态，推荐下一波需要观察的现象。
 
-**决策逻辑**:
+#### 4.3.1 推荐流程
+
+```
+session.active_hypotheses（已在 hypothesis_tracker 中检索过）
+    │
+    ▼
+1. 从活跃假设获取相关根因集合
+    │
+    ▼
+2. 扩展：获取这些根因的所有关联现象 (candidate_phenomena)
+    │
+    ▼
+3. 过滤：排除已确认/已否认的现象
+    │
+    ▼
+4. 打分：计算每个现象的推荐得分
+    │
+    ▼
+5. 返回 top-n 现象 (n=3)
+```
+
+#### 4.3.2 现象推荐得分公式
+
+```python
+def score(p):
+    return (
+        0.15 * popularity(p) +
+        0.20 * specificity(p) +
+        0.40 * hypothesis_priority(p) +
+        0.25 * information_gain(p)
+    )
+```
+
+#### 4.3.3 各因素计算
+
+设现象 p 关联的根因集合为 `R_p`
+
+**1. popularity(p) - 流行度**
+
+现象关联的根因中，最高的流行度。流行度高的根因更可能是真正的原因。
+
+```python
+def popularity(p):
+    """关联根因中最高的流行度"""
+    return max(ticket_count(r) / max_ticket_count for r in R_p)
+```
+
+**2. specificity(p) - 特异性**
+
+关联的根因越少，特异性越高。高特异性现象确认/否认后能更精确地定位根因。
+
+```python
+def specificity(p):
+    """关联根因越少，特异性越高"""
+    return 1 / len(R_p)
+```
+
+**3. hypothesis_priority(p) - 假设优先级**
+
+关联根因中最高的置信度。优先验证高置信度假设相关的现象。
+
+```python
+def hypothesis_priority(p):
+    """关联根因中最高的置信度"""
+    return max(confidence(r) for r in R_p)
+```
+
+**4. information_gain(p) - 信息增益**
+
+综合确认收益和区分能力。
+
+```python
+def information_gain(p):
+    """确认收益 + 区分能力"""
+    return 0.6 * confirmation_gain(p) + 0.4 * discrimination_power(p)
+```
+
+**confirmation_gain(p) - 确认收益**
+
+确认该现象对 top 假设的置信度提升空间。
+
+```python
+def confirmation_gain(p):
+    """确认 p 对 top 假设的置信度提升空间"""
+    if top_hypothesis.root_cause_id in R_p:
+        total = len(all_phenomena_of(top_hypothesis))
+        confirmed = len(confirmed_phenomena_of(top_hypothesis))
+        return 1 - confirmed / total  # 还有多少增长空间
+    return 0
+```
+
+**discrimination_power(p) - 区分能力**
+
+该现象能否有效区分 top-1 和 top-2 假设。
+
+```python
+def discrimination_power(p):
+    """p 能否区分 top-1 和 top-2 假设"""
+    if len(active_hypotheses) < 2:
+        return 0
+
+    top1, top2 = active_hypotheses[0], active_hypotheses[1]
+    top1_related = top1.root_cause_id in R_p
+    top2_related = top2.root_cause_id in R_p
+
+    if top1_related and not top2_related:
+        return 1.0  # 只与 top1 相关，完美区分
+    elif not top1_related and top2_related:
+        return 0.8  # 只与 top2 相关，可排除
+    elif top1_related and top2_related:
+        return 0.2  # 都相关，区分度低
+    else:
+        return 0.1  # 都不相关
+```
+
+#### 4.3.4 决策逻辑
 
 ```python
 def recommend_next_action(session):
@@ -601,19 +716,42 @@ def recommend_next_action(session):
     top_hypothesis = session.active_hypotheses[0]
 
     # 高置信度 -> 确认根因
-    if top_hypothesis.confidence > 0.85:
+    if top_hypothesis.confidence >= 0.80:
         return generate_root_cause_confirmation(top_hypothesis)
 
-    # 中低置信度 -> 推荐区分性现象
-    recommended = recommend_discriminating_phenomena(session, top_k=3)
-    return generate_recommendation(recommended)
+    # 收集并推荐现象
+    recommended = recommend_phenomena(session, n=3)
+    if recommended:
+        return generate_recommendation(recommended)
+
+    # 中等置信度但无更多现象 -> 也确认根因
+    if top_hypothesis.confidence >= 0.50:
+        return generate_root_cause_confirmation(top_hypothesis)
+
+    return ask_for_more_info()
 ```
 
-**现象选择策略**:
+#### 4.3.5 完整推荐流程伪代码
 
-1. 从 Top-N 候选工单中收集未确认的现象
-2. 计算每个现象的"区分能力"（能区分多少假设）
-3. 综合评分：`0.6 * coverage_score + 0.4 * uniqueness_score`
+```python
+def recommend_phenomena(session, n=3):
+    # 1. 从活跃假设获取相关根因（已在 hypothesis_tracker 中检索过）
+    relevant_root_causes = {h.root_cause_id for h in session.active_hypotheses}
+
+    # 2. 扩展到所有关联现象
+    candidates = set()
+    for r in relevant_root_causes:
+        candidates.update(get_phenomena_of(r))
+
+    # 3. 排除已确认/已否认
+    candidates -= confirmed_ids
+    candidates -= denied_ids
+
+    # 4. 计算得分，返回 top-n
+    scored = [(p, score(p)) for p in candidates]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:n]
+```
 
 ### 4.4 响应生成器 (ResponseGenerator)
 

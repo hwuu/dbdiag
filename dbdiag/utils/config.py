@@ -25,10 +25,34 @@ class EmbeddingModelConfig(BaseModel):
     dimension: int = 1024
 
 
+class RecommenderWeightsConfig(BaseModel):
+    """推荐引擎权重配置"""
+    popularity: float = 0.15
+    specificity: float = 0.20
+    hypothesis_priority: float = 0.40
+    information_gain: float = 0.25
+
+
+class RecommenderConfig(BaseModel):
+    """推荐引擎配置"""
+    # 权重
+    weights: RecommenderWeightsConfig = RecommenderWeightsConfig()
+    # 检索相关
+    retrieval_top_k: int = 5  # 检索 top-m 现象
+    recommend_top_n: int = 3  # 推荐 top-n 现象
+    # 置信度阈值
+    high_confidence_threshold: float = 0.80  # 高置信度阈值，达到后确认根因
+    medium_confidence_threshold: float = 0.50  # 中等置信度阈值
+    # information_gain 子权重
+    confirmation_gain_weight: float = 0.6
+    discrimination_power_weight: float = 0.4
+
+
 class Config(BaseModel):
     """全局配置"""
     llm: LLMConfig
     embedding_model: EmbeddingModelConfig
+    recommender: RecommenderConfig = RecommenderConfig()
 
 
 def load_config(config_path: Optional[str] = None) -> Config:

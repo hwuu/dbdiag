@@ -108,3 +108,33 @@ class RootCauseDAO(BaseDAO):
         with self.get_cursor(row_factory=False) as (conn, cursor):
             cursor.execute("SELECT COUNT(*) FROM root_causes")
             return cursor.fetchone()[0]
+
+    def get_max_ticket_count(self) -> int:
+        """
+        获取所有根因中最大的 ticket 数量
+
+        Returns:
+            最大 ticket 数量，如果没有数据返回 1
+        """
+        with self.get_cursor(row_factory=False) as (conn, cursor):
+            cursor.execute("SELECT MAX(ticket_count) FROM root_causes")
+            result = cursor.fetchone()[0]
+            return result if result else 1
+
+    def get_ticket_count(self, root_cause_id: str) -> int:
+        """
+        获取某个根因的 ticket 数量
+
+        Args:
+            root_cause_id: 根因 ID
+
+        Returns:
+            ticket 数量
+        """
+        with self.get_cursor(row_factory=False) as (conn, cursor):
+            cursor.execute(
+                "SELECT ticket_count FROM root_causes WHERE root_cause_id = ?",
+                (root_cause_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else 0

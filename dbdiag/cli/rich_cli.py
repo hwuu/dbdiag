@@ -60,7 +60,8 @@ class RichCLI:
         # 对话管理器
         self.dialogue_manager = PhenomenonDialogueManager(
             self.db_path, self.llm_service, self.embedding_service,
-            progress_callback=self._print_progress
+            progress_callback=self._print_progress,
+            recommender_config=self.config.recommender,
         )
 
         # DAO
