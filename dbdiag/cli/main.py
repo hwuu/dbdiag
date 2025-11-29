@@ -37,13 +37,15 @@ rich.markdown.Heading.__rich_console__ = _left_aligned_heading_console
 
 
 class RichCLI:
-    """Rich CLI 实验性原型"""
+    """Rich CLI"""
 
-    # ASCII Art 标题
     LOGO = """
-████▄  █████▄ ████▄  ██ ▄████▄  ▄████
-██  ██ ██▄▄██ ██  ██ ██ ██▄▄██ ██  ▄▄▄
-████▀  ██▄▄█▀ ████▀  ██ ██  ██  ▀███▀
+██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗
+██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝
+██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗
+██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║
+██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝
+╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝
 """
 
     def __init__(self):
@@ -144,21 +146,6 @@ class RichCLI:
             content_parts.append(Text("暂无假设", style="dim"))
 
         return Group(*content_parts)
-
-    def _render_welcome(self):
-        """渲染欢迎界面"""
-        # Logo + 可用命令
-        logo = Text("\n" + self.LOGO.strip() + "\n", style="bold blue")
-        commands_text = Text("可用命令: /help /status /reset /exit", style="dim")
-
-        self.console.print(Panel(
-            Group(logo, commands_text),
-            title="欢迎",
-            title_align="left",
-            border_style="blue",
-            box=box.ROUNDED,
-        ))
-        self.console.print()
 
     def _render_phenomenon_recommendation(self, response: dict):
         """渲染现象推荐"""
@@ -364,9 +351,11 @@ class RichCLI:
 
     def run(self):
         """运行 CLI 主循环"""
-        self._render_welcome()
-
-        # 首次输入提示
+        # 欢迎信息（无边框）
+        self.console.print()
+        self.console.print(Text(self.LOGO.strip(), style="bold blue"))
+        self.console.print(Text("可用命令: /help /status /reset /exit", style="dim"))
+        self.console.print()
         self.console.print(Text("请描述您遇到的数据库问题开始诊断。"))
 
         try:
