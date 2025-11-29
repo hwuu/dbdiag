@@ -35,7 +35,7 @@ def rebuild_index(
         similarity_threshold: 聚类相似度阈值，默认 0.85
     """
     if db_path is None:
-        project_root = Path(__file__).parent.parent
+        project_root = Path(__file__).parent.parent.parent
         db_path = str(project_root / "data" / "tickets.db")
 
     if not Path(db_path).exists():
