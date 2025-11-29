@@ -93,11 +93,11 @@ class RichCLI:
             self._hypothesis_total = total
             # 只在最后一个时显示
             if current == total:
-                self._print_indented(Text(f"  → 评估假设 ({total}/{total}) 完成", style="dim"))
+                self._print_indented(Text(f"→ 评估假设 ({total}/{total}) 完成", style="dim"))
             return
 
         # 其他消息正常显示（带缩进）
-        self._print_indented(Text(f"  → {message}", style="dim"))
+        self._print_indented(Text(f"→ {message}", style="dim"))
 
     def _get_root_cause_description(self, root_cause_id: str) -> str:
         """获取根因描述"""
@@ -197,22 +197,17 @@ class RichCLI:
             title.append(phenomenon.phenomenon_id, style="bold cyan")
             self._print_indented(title)
 
-            # 描述（处理多行缩进）
-            desc_lines = phenomenon.description.split("\n")
-            indented_desc = "\n    ".join(desc_lines)
-            self._print_indented(Text(f"    {indented_desc}"))
+            # 描述
+            self._print_indented(Text(phenomenon.description), num_spaces=6)
 
             # 观察方法
             if phenomenon.observation_method:
-                self._print_indented(Text("    观察方法:", style="dim"))
-                # 处理多行缩进
-                method_lines = phenomenon.observation_method.strip().split("\n")
-                indented_method = "\n    ".join(method_lines)
-                self._print_indented(Text(f"    {indented_method}"))
+                self._print_indented(Text("观察方法:", style="dim"), num_spaces=6)
+                self._print_indented(Text(phenomenon.observation_method.strip()), num_spaces=6)
 
             # 推荐原因
             if reason:
-                self._print_indented(Text(f"    推荐原因: {reason}", style="italic dim"))
+                self._print_indented(Text(f"推荐原因: {reason}", style="italic dim"), num_spaces=6)
 
             self._print_indented(Text(""))  # 空行
 
@@ -320,10 +315,10 @@ class RichCLI:
             self.console.print(text)
             return False
 
-    def _print_indented(self, content):
+    def _print_indented(self, content, num_spaces: int = 2) -> None:
         """打印带缩进的 Rich 对象"""
         from rich.padding import Padding
-        self.console.print(Padding(content, (0, 0, 0, 2)))
+        self.console.print(Padding(content, (0, 0, 0, num_spaces)))
 
     def _handle_diagnosis(self, user_message: str) -> bool:
         """处理诊断消息，返回 True 表示根因已定位"""

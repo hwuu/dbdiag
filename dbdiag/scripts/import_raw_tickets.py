@@ -21,7 +21,7 @@ def import_tickets(data_path: str, db_path: Optional[str] = None) -> None:
         db_path: 数据库文件路径，默认为 data/tickets.db
     """
     if db_path is None:
-        project_root = Path(__file__).parent.parent
+        project_root = Path(__file__).parent.parent.parent
         db_path = str(project_root / "data" / "tickets.db")
 
     data_path = Path(data_path)
