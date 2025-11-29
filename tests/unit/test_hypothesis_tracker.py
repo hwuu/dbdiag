@@ -53,13 +53,33 @@ class TestPhenomenonHypothesisTracker:
             VALUES ('T-002', '索引膨胀', '索引碎片', 'REINDEX')
         """)
 
-        # 插入 ticket_anomalies 关联
+        # 插入 root_causes
         cursor.execute("""
-            INSERT INTO ticket_anomalies (id, ticket_id, phenomenon_id, why_relevant)
+            INSERT INTO root_causes (root_cause_id, description, solution, ticket_count)
+            VALUES ('RC-0001', 'IO 瓶颈', '优化磁盘', 1)
+        """)
+        cursor.execute("""
+            INSERT INTO root_causes (root_cause_id, description, solution, ticket_count)
+            VALUES ('RC-0002', '索引碎片', 'REINDEX', 1)
+        """)
+
+        # 插入 tickets（hypothesis_tracker 使用 TicketDAO 查询此表）
+        cursor.execute("""
+            INSERT INTO tickets (ticket_id, metadata_json, description, root_cause_id, root_cause, solution)
+            VALUES ('T-001', '{}', '报表查询慢', 'RC-0001', 'IO 瓶颈', '优化磁盘')
+        """)
+        cursor.execute("""
+            INSERT INTO tickets (ticket_id, metadata_json, description, root_cause_id, root_cause, solution)
+            VALUES ('T-002', '{}', '索引膨胀', 'RC-0002', '索引碎片', 'REINDEX')
+        """)
+
+        # 插入 ticket_phenomena 关联
+        cursor.execute("""
+            INSERT INTO ticket_phenomena (id, ticket_id, phenomenon_id, why_relevant)
             VALUES ('ta1', 'T-001', 'P-0001', 'IO 等待高')
         """)
         cursor.execute("""
-            INSERT INTO ticket_anomalies (id, ticket_id, phenomenon_id, why_relevant)
+            INSERT INTO ticket_phenomena (id, ticket_id, phenomenon_id, why_relevant)
             VALUES ('ta2', 'T-002', 'P-0002', '索引膨胀导致查询慢')
         """)
 

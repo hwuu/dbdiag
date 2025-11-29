@@ -36,7 +36,8 @@ class IndexBuilderDAO(BaseDAO):
             cursor = conn.cursor()
             try:
                 # 1. 清除旧数据
-                cursor.execute("DELETE FROM ticket_anomalies")
+                cursor.execute("DELETE FROM phenomenon_root_causes")
+                cursor.execute("DELETE FROM ticket_phenomena")
                 cursor.execute("DELETE FROM phenomena")
 
                 # 2. 保存 phenomena
@@ -56,11 +57,11 @@ class IndexBuilderDAO(BaseDAO):
                         serialize_f32(p["embedding"]),
                     ))
 
-                # 3. 保存 ticket_anomalies
+                # 3. 保存 ticket_phenomena
                 for anomaly in raw_anomalies:
                     phenomenon_id = anomaly_to_phenomenon[anomaly["id"]]
                     cursor.execute("""
-                        INSERT INTO ticket_anomalies (
+                        INSERT INTO ticket_phenomena (
                             id, ticket_id, phenomenon_id, why_relevant, raw_anomaly_id
                         )
                         VALUES (?, ?, ?, ?, ?)
@@ -78,9 +79,12 @@ class IndexBuilderDAO(BaseDAO):
                 # 5. 同步到 tickets 表
                 self._sync_to_tickets(cursor, root_cause_map)
 
+                # 6. 构建 phenomenon_root_causes 表
+                self._build_phenomenon_root_causes(cursor)
+
                 conn.commit()
 
-                # 6. 统计
+                # 7. 统计
                 stats = self._get_stats(cursor)
                 return stats
 
@@ -125,9 +129,9 @@ class IndexBuilderDAO(BaseDAO):
 
             # 查找该根因关联的现象 ID
             cursor.execute("""
-                SELECT DISTINCT ta.phenomenon_id
-                FROM ticket_anomalies ta
-                WHERE ta.ticket_id IN (
+                SELECT DISTINCT tp.phenomenon_id
+                FROM ticket_phenomena tp
+                WHERE tp.ticket_id IN (
                     SELECT ticket_id FROM raw_tickets WHERE root_cause = ?
                 )
             """, (root_cause_text,))
@@ -186,12 +190,32 @@ class IndexBuilderDAO(BaseDAO):
                 solution,
             ))
 
+    def _build_phenomenon_root_causes(self, cursor) -> None:
+        """
+        从 ticket_phenomena + tickets 推导 phenomenon_root_causes 关联表
+
+        逻辑：phenomenon 出现在哪些 ticket 中，这些 ticket 的 root_cause 是什么
+        """
+        cursor.execute("""
+            INSERT INTO phenomenon_root_causes (phenomenon_id, root_cause_id, ticket_count)
+            SELECT
+                tp.phenomenon_id,
+                t.root_cause_id,
+                COUNT(*) as ticket_count
+            FROM ticket_phenomena tp
+            JOIN tickets t ON tp.ticket_id = t.ticket_id
+            WHERE t.root_cause_id IS NOT NULL
+            GROUP BY tp.phenomenon_id, t.root_cause_id
+        """)
+
     def _get_stats(self, cursor) -> Dict[str, int]:
         """获取统计信息"""
         cursor.execute("SELECT COUNT(*) FROM phenomena")
         phenomena_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM ticket_anomalies")
-        ticket_anomalies_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM ticket_phenomena")
+        ticket_phenomena_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM phenomenon_root_causes")
+        phenomenon_root_causes_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM root_causes")
         root_causes_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM tickets")
@@ -199,7 +223,8 @@ class IndexBuilderDAO(BaseDAO):
 
         return {
             "phenomena": phenomena_count,
-            "ticket_anomalies": ticket_anomalies_count,
+            "ticket_phenomena": ticket_phenomena_count,
+            "phenomenon_root_causes": phenomenon_root_causes_count,
             "root_causes": root_causes_count,
             "tickets": tickets_count,
         }

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
 from dbdiag.dao import (
-    BaseDAO, PhenomenonDAO, TicketDAO, TicketAnomalyDAO,
+    BaseDAO, PhenomenonDAO, TicketDAO, TicketPhenomenonDAO,
     RootCauseDAO, SessionDAO
 )
 from dbdiag.models import Phenomenon
@@ -188,13 +188,13 @@ class TestTicketDAO:
             VALUES ('P-0001', 'wait_io 高', 'SELECT ...', '[]', 1)
         """)
 
-        # 插入 ticket_anomalies
+        # 插入 ticket_phenomena
         cursor.execute("""
-            INSERT INTO ticket_anomalies (id, ticket_id, phenomenon_id, why_relevant)
+            INSERT INTO ticket_phenomena (id, ticket_id, phenomenon_id, why_relevant)
             VALUES ('T-001_a1', 'T-001', 'P-0001', '与 IO 相关')
         """)
         cursor.execute("""
-            INSERT INTO ticket_anomalies (id, ticket_id, phenomenon_id, why_relevant)
+            INSERT INTO ticket_phenomena (id, ticket_id, phenomenon_id, why_relevant)
             VALUES ('T-002_a1', 'T-002', 'P-0001', '与 IO 相关')
         """)
 
@@ -281,8 +281,8 @@ class TestTicketDAO:
             assert result == 2
 
 
-class TestTicketAnomalyDAO:
-    """TicketAnomalyDAO 测试"""
+class TestTicketPhenomenonDAO:
+    """TicketPhenomenonDAO 测试"""
 
     def _setup_test_db(self, tmpdir: str) -> str:
         """创建测试数据库"""
@@ -330,13 +330,13 @@ class TestTicketAnomalyDAO:
             VALUES ('P-0002', '索引膨胀', 'SELECT ...', '[]', 1)
         """)
 
-        # 插入 ticket_anomalies
+        # 插入 ticket_phenomena
         cursor.execute("""
-            INSERT INTO ticket_anomalies (id, ticket_id, phenomenon_id, why_relevant)
+            INSERT INTO ticket_phenomena (id, ticket_id, phenomenon_id, why_relevant)
             VALUES ('T-001_a1', 'T-001', 'P-0001', '与 IO 相关')
         """)
         cursor.execute("""
-            INSERT INTO ticket_anomalies (id, ticket_id, phenomenon_id, why_relevant)
+            INSERT INTO ticket_phenomena (id, ticket_id, phenomenon_id, why_relevant)
             VALUES ('T-002_a1', 'T-002', 'P-0002', '索引问题')
         """)
 
@@ -348,7 +348,7 @@ class TestTicketAnomalyDAO:
         """测试: 根据根因 ID 获取关联现象"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = self._setup_test_db(tmpdir)
-            dao = TicketAnomalyDAO(db_path)
+            dao = TicketPhenomenonDAO(db_path)
 
             result = dao.get_phenomena_by_root_cause_id("RC-0001")
 

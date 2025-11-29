@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
 from dbdiag.core.retriever import PhenomenonRetriever
-from dbdiag.dao import TicketDAO, TicketAnomalyDAO
+from dbdiag.dao import TicketDAO, TicketPhenomenonDAO, PhenomenonRootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 
@@ -15,7 +15,7 @@ from dbdiag.services.embedding_service import EmbeddingService
 class PhenomenonHypothesisTracker:
     """基于现象的假设追踪器
 
-    从 phenomena 和 ticket_anomalies 关联表中检索根因假设。
+    从 phenomena 和 ticket_phenomena 关联表中检索根因假设。
     """
 
     def __init__(
@@ -40,7 +40,8 @@ class PhenomenonHypothesisTracker:
         self.progress_callback = progress_callback
         self.retriever = PhenomenonRetriever(db_path, embedding_service)
         self._ticket_dao = TicketDAO(db_path)
-        self._ticket_anomaly_dao = TicketAnomalyDAO(db_path)
+        self._ticket_phenomenon_dao = TicketPhenomenonDAO(db_path)
+        self._phenomenon_root_cause_dao = PhenomenonRootCauseDAO(db_path)
 
     def _report_progress(self, message: str) -> None:
         """报告进度"""
@@ -244,7 +245,7 @@ class PhenomenonHypothesisTracker:
         Returns:
             现象 ID 集合
         """
-        return self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(root_cause_id)
+        return self._phenomenon_root_cause_dao.get_phenomena_by_root_cause_id(root_cause_id)
 
     def _identify_missing_phenomena(
         self,

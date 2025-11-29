@@ -34,7 +34,7 @@ dbdiag/
 │   ├── cli/                # 命令行界面
 │   ├── scripts/            # 初始化脚本
 │   │   ├── init_db.py              # 创建数据库
-│   │   ├── import_tickets.py       # 导入工单数据
+│   │   ├── import_raw_tickets.py   # 导入工单数据
 │   │   ├── rebuild_index.py        # 重建索引（phenomena、root_causes）
 │   │   └── visualize_knowledge_graph.py  # 知识图谱可视化
 │   └── utils/              # 工具函数

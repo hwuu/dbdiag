@@ -116,8 +116,8 @@ class TestRebuildIndex:
 
             conn.close()
 
-    def test_rebuild_index_creates_ticket_anomalies(self):
-        """测试:rebuild_index 应创建 ticket_anomalies 关联"""
+    def test_rebuild_index_creates_ticket_phenomena(self):
+        """测试:rebuild_index 应创建 ticket_phenomena 关联"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path, _ = self._setup_test_db(tmpdir)
 
@@ -144,8 +144,8 @@ class TestRebuildIndex:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
-            # 应该创建了 ticket_anomalies 关联（每个原始异常对应一个）
-            cursor.execute("SELECT COUNT(*) FROM ticket_anomalies")
+            # 应该创建了 ticket_phenomena 关联（每个原始异常对应一个）
+            cursor.execute("SELECT COUNT(*) FROM ticket_phenomena")
             count = cursor.fetchone()[0]
             assert count == 4  # 4 个原始异常
 
@@ -193,7 +193,7 @@ class TestRebuildIndex:
             conn.close()
 
     def test_rebuild_index_preserves_why_relevant(self):
-        """测试:ticket_anomalies 应保留原始的 why_relevant"""
+        """测试:ticket_phenomena 应保留原始的 why_relevant"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path, _ = self._setup_test_db(tmpdir)
 
@@ -216,7 +216,7 @@ class TestRebuildIndex:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT why_relevant FROM ticket_anomalies
+                SELECT why_relevant FROM ticket_phenomena
                 WHERE id = 'TICKET-001_anomaly_1'
             """)
             row = cursor.fetchone()
@@ -226,7 +226,7 @@ class TestRebuildIndex:
             conn.close()
 
     def test_rebuild_index_clears_old_data(self):
-        """测试:rebuild_index 应清除旧的 phenomena 和 ticket_anomalies"""
+        """测试:rebuild_index 应清除旧的 phenomena 和 ticket_phenomena"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path, _ = self._setup_test_db(tmpdir)
 
