@@ -10,14 +10,14 @@ from unittest.mock import patch
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dbdiag.cli.main import CLI
+from dbdiag.cli.main import RichCLI
 
 
 def test_cli_help_command():
     """测试 /help 命令"""
     print("\n=== 测试 /help 命令 ===")
 
-    cli = CLI()
+    cli = RichCLI()
 
     # 模拟输入
     with patch("builtins.input", side_effect=["/help", "/exit"]):
@@ -44,7 +44,7 @@ def test_cli_basic_interaction():
     """测试基本交互流程"""
     print("\n=== 测试基本交互流程 ===")
 
-    cli = CLI()
+    cli = RichCLI()
 
     # 模拟输入：问题描述 -> 检查结果 -> 退出
     user_inputs = [
@@ -61,7 +61,7 @@ def test_cli_basic_interaction():
             output = sys.stdout.getvalue()
 
             # 验证欢迎信息
-            assert "数据库诊断助手" in output
+            assert "请描述" in output or "DBDIAG" in output
 
             # 验证有推荐输出
             # 注意：实际输出依赖于数据库和模型，这里只做基本检查
