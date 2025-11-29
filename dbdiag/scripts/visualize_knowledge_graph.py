@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 from pyvis.network import Network
 
-from dbdiag.dao import RootCauseDAO, TicketDAO, PhenomenonDAO, TicketAnomalyDAO
+from dbdiag.dao import RootCauseDAO, TicketDAO, PhenomenonDAO, TicketPhenomenonDAO
 
 
 # 布局配置
@@ -119,7 +119,7 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
     root_cause_dao = RootCauseDAO(db_path)
     ticket_dao = TicketDAO(db_path)
     phenomenon_dao = PhenomenonDAO(db_path)
-    ticket_anomaly_dao = TicketAnomalyDAO(db_path)
+    ticket_phenomenon_dao = TicketPhenomenonDAO(db_path)
 
     # 创建网络图（占满整个视口）
     net = Network(
@@ -148,7 +148,7 @@ def create_knowledge_graph(db_path: str, output_path: str, layout: str = "force"
     phenomena = phenomenon_dao.get_all(limit=10000)
 
     # 4. 获取关联关系
-    associations = ticket_anomaly_dao.get_all_associations()
+    associations = ticket_phenomenon_dao.get_all_associations()
 
     # 添加根因节点（蓝色圆形，大号）- 层级 0
     for root_cause in root_causes:

@@ -33,17 +33,19 @@ class TestInitDatabase:
             tables = [row[0] for row in cursor.fetchall()]
             conn.close()
 
-            # V1 表（保留兼容）
+            # 核心表
             assert "tickets" in tables
-            assert "diagnostic_steps" in tables
             assert "sessions" in tables
-            assert "root_causes" in tables  # V2 重命名：root_cause_patterns → root_causes
+            assert "root_causes" in tables
 
-            # V2 新增表
+            # 原始数据表
             assert "raw_tickets" in tables
             assert "raw_anomalies" in tables
+
+            # 处理后数据表
             assert "phenomena" in tables
-            assert "ticket_anomalies" in tables
+            assert "ticket_phenomena" in tables
+            assert "phenomenon_root_causes" in tables
 
     def test_tickets_table_structure(self):
         """测试:tickets 表结构（包含 root_cause_id）"""
@@ -141,15 +143,15 @@ class TestInitDatabase:
             assert "embedding" in columns
             assert "created_at" in columns
 
-    def test_ticket_anomalies_table_structure(self):
-        """测试:ticket_anomalies 表结构"""
+    def test_ticket_phenomena_table_structure(self):
+        """测试:ticket_phenomena 表结构"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             init_database(db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(ticket_anomalies)")
+            cursor.execute("PRAGMA table_info(ticket_phenomena)")
             columns = {row[1]: row[2] for row in cursor.fetchall()}
             conn.close()
 
@@ -158,6 +160,22 @@ class TestInitDatabase:
             assert "phenomenon_id" in columns
             assert "why_relevant" in columns
             assert "raw_anomaly_id" in columns
+
+    def test_phenomenon_root_causes_table_structure(self):
+        """测试:phenomenon_root_causes 表结构"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            init_database(db_path)
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(phenomenon_root_causes)")
+            columns = {row[1]: row[2] for row in cursor.fetchall()}
+            conn.close()
+
+            assert "phenomenon_id" in columns
+            assert "root_cause_id" in columns
+            assert "ticket_count" in columns
 
     def test_phenomena_fts_table_exists(self):
         """测试:phenomena 全文检索表应存在"""

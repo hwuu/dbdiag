@@ -1,13 +1,13 @@
 """索引重建脚本
 
-从原始数据表（raw_anomalies）重建标准现象库（phenomena）和关联表（ticket_anomalies）。
+从原始数据表（raw_anomalies）重建标准现象库（phenomena）和关联表（ticket_phenomena, phenomenon_root_causes）。
 
 核心流程：
 1. 读取 raw_anomalies
 2. 生成向量（Embedding API）
 3. 向量聚类（相似度阈值）
 4. LLM 生成标准描述
-5. 生成 phenomena + ticket_anomalies
+5. 生成 phenomena + ticket_phenomena + phenomenon_root_causes
 6. 构建向量索引
 """
 import numpy as np
@@ -52,6 +52,11 @@ def rebuild_index(
     embedding_service = EmbeddingService(config)
     llm_service = LLMService(config)
 
+    # DEBUG: 打印 embedding 配置
+    print(f"\n[DEBUG] Embedding 配置:")
+    print(f"  model: {config.embedding_model.model}")
+    print(f"  api_base: {config.embedding_model.api_base}")
+
     # 初始化 DAO
     raw_anomaly_dao = RawAnomalyDAO(db_path)
     index_builder_dao = IndexBuilderDAO(db_path)
@@ -74,6 +79,11 @@ def rebuild_index(
         anomaly["embedding"] = embeddings[i]
 
     print(f"  生成了 {len(embeddings)} 个向量")
+    # DEBUG: 打印向量维度和前几个向量的范数
+    if embeddings:
+        print(f"  [DEBUG] 向量维度: {len(embeddings[0])}")
+        norms = [np.linalg.norm(e) for e in embeddings[:5]]
+        print(f"  [DEBUG] 前 5 个向量范数: {[f'{n:.4f}' for n in norms]}")
 
     # 3. 向量聚类
     print("\n[3/6] 向量聚类...")
@@ -110,7 +120,8 @@ def rebuild_index(
 
         print(f"\n[OK] 索引重建完成")
         print(f"  phenomena: {stats['phenomena']}")
-        print(f"  ticket_anomalies: {stats['ticket_anomalies']}")
+        print(f"  ticket_phenomena: {stats['ticket_phenomena']}")
+        print(f"  phenomenon_root_causes: {stats['phenomenon_root_causes']}")
         print(f"  root_causes: {stats['root_causes']}")
         print(f"  tickets: {stats['tickets']}")
 
@@ -122,6 +133,7 @@ def rebuild_index(
 def cluster_by_similarity(
     items: List[Dict[str, Any]],
     similarity_threshold: float,
+    debug: bool = True,
 ) -> List[List[Dict[str, Any]]]:
     """
     基于向量相似度的聚类算法
@@ -134,12 +146,16 @@ def cluster_by_similarity(
     Args:
         items: 包含 'embedding' 字段的项列表
         similarity_threshold: 相似度阈值
+        debug: 是否打印调试信息
 
     Returns:
         聚类列表，每个聚类是一个项列表
     """
     clusters: List[List[Dict[str, Any]]] = []
     cluster_centers: List[List[float]] = []
+
+    # DEBUG: 记录聚类过程
+    merge_log = []
 
     for item in items:
         embedding = item["embedding"]
@@ -163,10 +179,29 @@ def cluster_by_similarity(
             cluster_centers[matched_cluster_idx] = (
                 (old_center * (n - 1) + new_embedding) / n
             ).tolist()
+            # DEBUG: 记录合并
+            if debug:
+                merge_log.append({
+                    "item_id": item["id"],
+                    "cluster_idx": matched_cluster_idx,
+                    "similarity": max_similarity,
+                })
         else:
             # 创建新聚类
             clusters.append([item])
             cluster_centers.append(embedding)
+
+    # DEBUG: 打印聚类详情
+    if debug:
+        print(f"  [DEBUG] 聚类合并次数: {len(merge_log)}")
+        # 打印多项聚类的详情
+        multi_item_clusters = [(i, c) for i, c in enumerate(clusters) if len(c) > 1]
+        print(f"  [DEBUG] 多项聚类数: {len(multi_item_clusters)}")
+        for cluster_idx, cluster in multi_item_clusters[:10]:  # 只打印前 10 个
+            item_ids = [item["id"] for item in cluster]
+            print(f"    聚类 {cluster_idx}: {item_ids}")
+        if len(multi_item_clusters) > 10:
+            print(f"    ... 还有 {len(multi_item_clusters) - 10} 个多项聚类")
 
     return clusters
 

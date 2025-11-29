@@ -5,7 +5,7 @@
 from typing import Optional, List, Dict, Set
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
-from dbdiag.dao import PhenomenonDAO, RootCauseDAO, TicketAnomalyDAO
+from dbdiag.dao import PhenomenonDAO, RootCauseDAO, TicketPhenomenonDAO, PhenomenonRootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.utils.config import RecommenderConfig
 
@@ -35,7 +35,8 @@ class PhenomenonRecommendationEngine:
         self.config = config or RecommenderConfig()
         self._phenomenon_dao = PhenomenonDAO(db_path)
         self._root_cause_dao = RootCauseDAO(db_path)
-        self._ticket_anomaly_dao = TicketAnomalyDAO(db_path)
+        self._ticket_phenomenon_dao = TicketPhenomenonDAO(db_path)
+        self._phenomenon_root_cause_dao = PhenomenonRootCauseDAO(db_path)
         # 缓存 max_ticket_count
         self._max_ticket_count: Optional[int] = None
 
@@ -127,7 +128,7 @@ class PhenomenonRecommendationEngine:
         # 2. 扩展：获取这些根因的所有关联现象
         candidate_phenomenon_ids: Set[str] = set()
         for root_cause_id in relevant_root_causes:
-            phenomenon_ids = self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(
+            phenomenon_ids = self._phenomenon_root_cause_dao.get_phenomena_by_root_cause_id(
                 root_cause_id
             )
             candidate_phenomenon_ids.update(phenomenon_ids)
@@ -147,7 +148,7 @@ class PhenomenonRecommendationEngine:
                 continue
 
             # 获取现象关联的根因
-            related_root_cause_ids = self._ticket_anomaly_dao.get_root_causes_by_phenomenon_id(
+            related_root_cause_ids = self._phenomenon_root_cause_dao.get_root_causes_by_phenomenon_id(
                 phenomenon_id
             )
 
@@ -194,10 +195,15 @@ class PhenomenonRecommendationEngine:
         """
         weights = self.config.weights
 
+        # 获取该现象与各根因的 ticket_count
+        root_cause_ticket_counts = self._phenomenon_root_cause_dao.get_root_causes_with_ticket_count(
+            phenomenon_id
+        )
+
         popularity = self._calculate_popularity(related_root_cause_ids)
         specificity = self._calculate_specificity(related_root_cause_ids)
         hypothesis_priority = self._calculate_hypothesis_priority(
-            related_root_cause_ids, session
+            related_root_cause_ids, session, root_cause_ticket_counts
         )
         information_gain = self._calculate_information_gain(
             phenomenon_id, related_root_cause_ids, session
@@ -245,15 +251,25 @@ class PhenomenonRecommendationEngine:
         return 1.0 / len(related_root_cause_ids)
 
     def _calculate_hypothesis_priority(
-        self, related_root_cause_ids: Set[str], session: SessionState
+        self,
+        related_root_cause_ids: Set[str],
+        session: SessionState,
+        root_cause_ticket_counts: Dict[str, int] = None,
     ) -> float:
         """
-        计算假设优先级：关联根因中最高的置信度
+        计算假设优先级：关联根因的置信度，加权 ticket_count
 
-        hypothesis_priority = max(confidence(r) for r in R_p)
+        hypothesis_priority = max(confidence(r) * support_weight(r) for r in R_p)
+
+        其中 support_weight 基于 ticket_count，票数越多支持越强。
         """
         if not related_root_cause_ids or not session.active_hypotheses:
             return 0.0
+
+        root_cause_ticket_counts = root_cause_ticket_counts or {}
+
+        # 计算 ticket_count 的归一化因子
+        max_ticket_count = max(root_cause_ticket_counts.values()) if root_cause_ticket_counts else 1
 
         # 构建根因 -> 置信度映射
         confidence_map = {
@@ -263,7 +279,15 @@ class PhenomenonRecommendationEngine:
         max_priority = 0.0
         for root_cause_id in related_root_cause_ids:
             confidence = confidence_map.get(root_cause_id, 0.0)
-            max_priority = max(max_priority, confidence)
+
+            # 计算支持权重：ticket_count 越高，权重越大
+            # 使用 sqrt 平滑，避免票数差异过大导致的极端影响
+            ticket_count = root_cause_ticket_counts.get(root_cause_id, 1)
+            support_weight = (ticket_count / max_ticket_count) ** 0.5 if max_ticket_count > 0 else 1.0
+
+            # 综合得分 = 置信度 * 支持权重
+            weighted_priority = confidence * (0.7 + 0.3 * support_weight)
+            max_priority = max(max_priority, weighted_priority)
 
         return max_priority
 
@@ -308,7 +332,7 @@ class PhenomenonRecommendationEngine:
             return 0.0
 
         # 获取 top 假设的所有关联现象
-        all_phenomena = self._ticket_anomaly_dao.get_phenomena_by_root_cause_id(
+        all_phenomena = self._phenomenon_root_cause_dao.get_phenomena_by_root_cause_id(
             top_hypothesis.root_cause_id
         )
         total = len(all_phenomena) if all_phenomena else 1

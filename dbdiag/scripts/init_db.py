@@ -2,10 +2,10 @@
 
 创建 SQLite 数据库的所有表结构
 
-V2 架构变更：
-- 新增原始数据表：raw_tickets, raw_anomalies
-- 新增处理后数据表：phenomena, ticket_anomalies
-- 保留 V1 表（diagnostic_steps）用于向后兼容，标记为 deprecated
+表结构：
+- 原始数据表：raw_tickets, raw_anomalies
+- 处理后数据表：phenomena, ticket_phenomena, phenomenon_root_causes, tickets, root_causes
+- 会话表：sessions
 """
 import sqlite3
 from pathlib import Path
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS phenomena (
 );
 
 -- 工单-现象关联表
-CREATE TABLE IF NOT EXISTS ticket_anomalies (
+CREATE TABLE IF NOT EXISTS ticket_phenomena (
     id TEXT PRIMARY KEY,                       -- 格式: {ticket_id}_anomaly_{index}
     ticket_id TEXT NOT NULL,
     phenomenon_id TEXT NOT NULL,               -- 关联的标准现象
@@ -70,9 +70,23 @@ CREATE TABLE IF NOT EXISTS ticket_anomalies (
     FOREIGN KEY (raw_anomaly_id) REFERENCES raw_anomalies(id)
 );
 
--- 为 ticket_anomalies 创建索引
-CREATE INDEX IF NOT EXISTS idx_ticket_anomalies_ticket_id ON ticket_anomalies(ticket_id);
-CREATE INDEX IF NOT EXISTS idx_ticket_anomalies_phenomenon_id ON ticket_anomalies(phenomenon_id);
+-- 为 ticket_phenomena 创建索引
+CREATE INDEX IF NOT EXISTS idx_ticket_phenomena_ticket_id ON ticket_phenomena(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_phenomena_phenomenon_id ON ticket_phenomena(phenomenon_id);
+
+-- 现象-根因关联表（从 ticket 数据推导）
+CREATE TABLE IF NOT EXISTS phenomenon_root_causes (
+    phenomenon_id TEXT NOT NULL,
+    root_cause_id TEXT NOT NULL,
+    ticket_count INTEGER DEFAULT 1,            -- 支持该关联的工单数量
+    PRIMARY KEY (phenomenon_id, root_cause_id),
+    FOREIGN KEY (phenomenon_id) REFERENCES phenomena(phenomenon_id),
+    FOREIGN KEY (root_cause_id) REFERENCES root_causes(root_cause_id)
+);
+
+-- 为 phenomenon_root_causes 创建索引
+CREATE INDEX IF NOT EXISTS idx_phenomenon_root_causes_phenomenon_id ON phenomenon_root_causes(phenomenon_id);
+CREATE INDEX IF NOT EXISTS idx_phenomenon_root_causes_root_cause_id ON phenomenon_root_causes(root_cause_id);
 
 -- 现象全文检索虚拟表
 CREATE VIRTUAL TABLE IF NOT EXISTS phenomena_fts USING fts5(
@@ -100,78 +114,26 @@ CREATE TRIGGER IF NOT EXISTS phenomena_au AFTER UPDATE ON phenomena BEGIN
 END;
 
 -- ============================================
--- V1 表（保留兼容，标记为 deprecated）
+-- 处理后数据表（主表）
 -- ============================================
 
--- 工单表（V1，保留兼容）
+-- 工单表
 CREATE TABLE IF NOT EXISTS tickets (
     ticket_id TEXT PRIMARY KEY,
     metadata_json TEXT NOT NULL,      -- JSON: {"db_type": "...", "version": "...", "module": "...", "severity": "..."}
     description TEXT NOT NULL,        -- 问题描述
-    root_cause_id TEXT,               -- 关联根因 ID（V2 新增）
-    root_cause TEXT NOT NULL,         -- 根因描述（保留兼容）
+    root_cause_id TEXT,               -- 关联根因 ID
+    root_cause TEXT NOT NULL,         -- 根因描述
     solution TEXT NOT NULL,           -- 解决方案
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (root_cause_id) REFERENCES root_causes(root_cause_id)
 );
 
--- 诊断步骤表（V1，DEPRECATED - 请使用 phenomena 表）
-CREATE TABLE IF NOT EXISTS diagnostic_steps (
-    step_id TEXT PRIMARY KEY,              -- 格式: {ticket_id}_step_{index}
-    ticket_id TEXT NOT NULL,
-    step_index INTEGER NOT NULL,           -- 步骤在工单中的顺序
-
-    -- 步骤内容
-    observed_fact TEXT NOT NULL,           -- 观察到的现象
-    observation_method TEXT NOT NULL,      -- 具体操作（SQL、命令等）
-    analysis_result TEXT NOT NULL,         -- 推理结果
-
-    -- 冗余字段（便于检索）
-    ticket_description TEXT NOT NULL,      -- 冗余工单描述
-    ticket_root_cause TEXT NOT NULL,       -- 冗余根因
-
-    -- 向量字段（暂时为 NULL，在 rebuild-index 时填充）
-    fact_embedding BLOB,                   -- observed_fact 的向量表示
-    method_embedding BLOB,                 -- observation_method 的向量表示
-
-    FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id)
-);
-
--- 为 diagnostic_steps 创建索引
-CREATE INDEX IF NOT EXISTS idx_diagnostic_steps_ticket_id ON diagnostic_steps(ticket_id);
-CREATE INDEX IF NOT EXISTS idx_diagnostic_steps_step_index ON diagnostic_steps(step_index);
-
--- 全文检索虚拟表（V1，保留兼容）
-CREATE VIRTUAL TABLE IF NOT EXISTS steps_fts USING fts5(
-    step_id UNINDEXED,
-    observed_fact,
-    observation_method,
-    analysis_result,
-    content=diagnostic_steps,
-    content_rowid=rowid
-);
-
--- 全文检索触发器（保持 FTS 同步）
-CREATE TRIGGER IF NOT EXISTS diagnostic_steps_ai AFTER INSERT ON diagnostic_steps BEGIN
-    INSERT INTO steps_fts(rowid, step_id, observed_fact, observation_method, analysis_result)
-    VALUES (new.rowid, new.step_id, new.observed_fact, new.observation_method, new.analysis_result);
-END;
-
-CREATE TRIGGER IF NOT EXISTS diagnostic_steps_ad AFTER DELETE ON diagnostic_steps BEGIN
-    DELETE FROM steps_fts WHERE rowid = old.rowid;
-END;
-
-CREATE TRIGGER IF NOT EXISTS diagnostic_steps_au AFTER UPDATE ON diagnostic_steps BEGIN
-    DELETE FROM steps_fts WHERE rowid = old.rowid;
-    INSERT INTO steps_fts(rowid, step_id, observed_fact, observation_method, analysis_result)
-    VALUES (new.rowid, new.step_id, new.observed_fact, new.observation_method, new.analysis_result);
-END;
-
 -- ============================================
 -- 共享表
 -- ============================================
 
--- 根因表（V2 重构：从 root_cause_patterns 改名）
+-- 根因表
 CREATE TABLE IF NOT EXISTS root_causes (
     root_cause_id TEXT PRIMARY KEY,        -- 格式: RC-{序号}，如 RC-0001
     description TEXT NOT NULL,             -- 根因描述
