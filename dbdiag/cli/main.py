@@ -34,7 +34,8 @@ class CLI:
         # 初始化对话管理器 (V2)，传入进度回调
         self.dialogue_manager = PhenomenonDialogueManager(
             self.db_path, self.llm_service, self.embedding_service,
-            progress_callback=self._print_progress
+            progress_callback=self._print_progress,
+            recommender_config=self.config.recommender,
         )
 
         # 格式化器

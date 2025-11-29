@@ -16,6 +16,7 @@ from dbdiag.core.response_generator import ResponseGenerator
 from dbdiag.dao import PhenomenonDAO
 from dbdiag.services.session_service import SessionService
 from dbdiag.services.llm_service import LLMService
+from dbdiag.utils.config import RecommenderConfig
 
 
 class PhenomenonDialogueManager:
@@ -30,6 +31,7 @@ class PhenomenonDialogueManager:
         llm_service: LLMService,
         embedding_service: Optional["EmbeddingService"] = None,
         progress_callback: Optional[callable] = None,
+        recommender_config: Optional[RecommenderConfig] = None,
     ):
         """
         初始化对话管理器
@@ -39,6 +41,7 @@ class PhenomenonDialogueManager:
             llm_service: LLM 服务实例（单例）
             embedding_service: Embedding 服务实例（单例，可选）
             progress_callback: 进度回调函数，签名为 callback(message: str)
+            recommender_config: 推荐引擎配置
         """
         self.db_path = db_path
         self.llm_service = llm_service
@@ -51,7 +54,9 @@ class PhenomenonDialogueManager:
             db_path, llm_service, embedding_service,
             progress_callback=progress_callback
         )
-        self.recommender = PhenomenonRecommendationEngine(db_path, llm_service)
+        self.recommender = PhenomenonRecommendationEngine(
+            db_path, llm_service, recommender_config
+        )
         self.response_generator = ResponseGenerator(db_path, llm_service)
         self._phenomenon_dao = PhenomenonDAO(db_path)
 

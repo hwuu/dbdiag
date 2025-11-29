@@ -170,3 +170,26 @@ class TicketAnomalyDAO(BaseDAO):
                 FROM ticket_anomalies
             """)
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_root_causes_by_phenomenon_id(self, phenomenon_id: str) -> Set[str]:
+        """
+        获取与某个现象关联的所有根因 ID
+
+        Args:
+            phenomenon_id: 现象 ID
+
+        Returns:
+            根因 ID 集合
+        """
+        with self.get_cursor(row_factory=False) as (conn, cursor):
+            cursor.execute(
+                """
+                SELECT DISTINCT t.root_cause_id
+                FROM ticket_anomalies ta
+                JOIN tickets t ON ta.ticket_id = t.ticket_id
+                WHERE ta.phenomenon_id = ?
+                  AND t.root_cause_id IS NOT NULL
+                """,
+                (phenomenon_id,),
+            )
+            return {row[0] for row in cursor.fetchall()}

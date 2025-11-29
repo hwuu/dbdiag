@@ -15,3 +15,21 @@ embedding_model:
   api_key: "sk-"
   model: "Qwen/Qwen3-Embedding-4B"
   dimension: 2560  # 向量维度（Qwen3-Embedding-4B 为 2560）
+
+# 推荐引擎配置
+recommender:
+  # 权重配置
+  weights:
+    popularity: 0.15          # 流行度权重
+    specificity: 0.20         # 特异性权重
+    hypothesis_priority: 0.40 # 假设优先级权重
+    information_gain: 0.25    # 信息增益权重
+  # 检索相关
+  retrieval_top_k: 5          # 检索 top-m 现象
+  recommend_top_n: 3          # 推荐 top-n 现象
+  # 置信度阈值
+  high_confidence_threshold: 0.80   # 高置信度阈值，达到后确认根因
+  medium_confidence_threshold: 0.50 # 中等置信度阈值
+  # information_gain 子权重
+  confirmation_gain_weight: 0.6     # 确认收益权重
+  discrimination_power_weight: 0.4  # 区分能力权重
