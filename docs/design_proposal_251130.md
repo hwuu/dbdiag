@@ -1,13 +1,34 @@
-# 设计提案：基于 RAG + LLM 的简化诊断方案
+# 设计提案：检索增强推理方法（实验性探索）
 
 **日期**: 2025-11-30
-**状态**: 提案阶段
+**状态**: 实验性探索
 
 ---
 
-## 一、背景
+## 一、背景与目标
 
-当前 V2 架构采用多模块协作的方式进行诊断：
+### 1.1 探索动机
+
+本项目当前使用 **图谱增强推理方法（GAR）** 进行诊断，该方法在可靠性、可解释性等方面表现优秀，但也存在一些局限性（如预处理依赖、灵活性受限等）。
+
+本提案探索另一种思路：**检索增强推理方法（RAR）**，通过 RAG 检索 + LLM 端到端推理，验证能否弥补图谱方法的不足。
+
+> ⚠️ 本提案是实验性探索，**并非要替代图谱方法**，而是发现两种方法的互补点，为未来架构演进积累经验。
+
+### 1.2 术语定义
+
+| 方法 | 全称 | 英文 | 简称 |
+|------|------|------|------|
+| 现有方法 | 图谱增强推理方法 | Graph-Augmented-Reasoning (GAR) | 图谱方法 |
+| 本提案 | 检索增强推理方法 | Retrieval-Augmented-Reasoning (RAR) | 检索方法 |
+
+---
+
+## 二、两种方法概述
+
+### 2.1 图谱方法 (GAR)
+
+**架构**：多模块协作
 
 ```
 用户输入 → Retriever → HypothesisTracker → Recommender → ResponseGenerator
@@ -15,66 +36,94 @@
          检索现象      追踪假设置信度      多因素打分推荐
 ```
 
-这种架构虽然可控性强、可解释性好，但复杂度较高，维护成本大。
+**数据依赖**：`phenomena`、`root_causes`、`phenomenon_root_causes` 等预处理表
 
-本提案探讨一种 **naive 但实用** 的替代方案：直接用 RAG 检索相关工单，让 LLM 端到端完成推理和决策。
+**核心类**：`GARDialogueManager`
+
+**优势**：
+- ✅ **可靠性强**：确定性算法，行为可预测、可复现
+- ✅ **可解释性好**：量化置信度、打分依据、工单引用
+- ✅ **无幻觉风险**：所有内容来自真实数据
+- ✅ **性能高效**：预处理索引，运行时快速
+- ✅ **状态一致**：SessionState 严格追踪，不会重复推荐
+
+**局限**：
+- ⚠️ **预处理依赖**：需要 rebuild-index，新工单无法实时生效
+- ⚠️ **灵活性受限**：只能推荐预定义的 phenomena
+- ⚠️ **冷启动问题**：需要足够历史工单构建知识图谱
+- ⚠️ **语义理解有限**：向量相似度匹配，对表述多样性理解不如 LLM
+- ⚠️ **架构复杂**：多模块协作，学习和维护成本较高
+
+### 2.2 检索方法 (RAR)
+
+**架构**：RAG + LLM 端到端
+
+```
+用户输入 → RAG 检索 raw_tickets → LLM 推理决策 → 输出
+                                      ↓
+                          推荐现象 或 诊断结论
+```
+
+**数据依赖**：`raw_tickets`（单表，无需预处理）
+
+**核心类**：`RARDialogueManager`（待实现）
+
+**优势**：
+- ✅ **架构简单**：核心逻辑约 100-200 行代码
+- ✅ **灵活性高**：LLM 自由组合信息，不受预定义限制
+- ✅ **无需预处理**：直接使用原始工单数据
+- ✅ **冷启动友好**：少量工单即可工作
+- ✅ **语义理解强**：LLM 理解用户表述的多样性
+
+**局限**：
+- ⚠️ **幻觉风险**：LLM 可能编造不存在的内容
+- ⚠️ **可解释性差**：推理过程是黑盒
+- ⚠️ **行为不稳定**：相同输入可能得到不同输出
+- ⚠️ **收敛不可控**：可能过早/过晚给出结论
+- ⚠️ **成本较高**：每轮需要 LLM 调用
 
 ---
 
-## 二、方案概述
+## 三、对比分析
 
-### 2.1 核心思路
+### 3.1 综合对比
 
-每轮对话：
-1. **RAG 检索**：根据用户输入 + 对话历史，检索相关的 `raw_tickets`
-2. **LLM 决策**：LLM 根据检索到的工单和上下文，决定：
-   - **继续收集信息**：推荐用户检查 1-3 个现象
-   - **给出诊断结论**：输出根因分析报告
+| 维度 | 图谱方法 (GAR) | 检索方法 (RAR) |
+|------|---------------|---------------|
+| **架构** | 多模块协作 | RAG + LLM |
+| **数据依赖** | 预处理多表 | 原始单表 |
+| **可靠性** | ✅ 高 | ⚠️ 中 |
+| **可解释性** | ✅ 高 | ⚠️ 中 |
+| **幻觉风险** | ✅ 无 | ⚠️ 有 |
+| **运行性能** | ✅ 快 | ⚠️ 慢 |
+| **灵活性** | ⚠️ 低 | ✅ 高 |
+| **预处理成本** | ⚠️ 高 | ✅ 低 |
+| **冷启动** | ⚠️ 难 | ✅ 易 |
+| **语义理解** | ⚠️ 有限 | ✅ 强 |
+| **维护成本** | ⚠️ 中 | ✅ 低 |
 
-### 2.2 架构对比
+### 3.2 适用场景
 
-| 维度 | 现有 V2 架构 | 本提案 |
-|------|-------------|--------|
-| 核心模块 | Retriever + HypothesisTracker + Recommender + ResponseGenerator | RAG + LLM |
-| 数据依赖 | phenomena, root_causes, phenomenon_root_causes 等多表 | raw_tickets（单表） |
-| 决策方式 | 规则 + 打分公式 | LLM 端到端推理 |
-| 代码复杂度 | 高 | 低 |
-| 可解释性 | 高（量化置信度、打分依据） | 中（依赖 LLM 输出） |
+**图谱方法更适合**：
+- 生产环境（需要可靠性和可预测行为）
+- 高频诊断（性能敏感）
+- 合规审计（需要可解释的决策依据）
+- 工单量充足且相对稳定的场景
 
----
+**检索方法更适合**：
+- 快速原型验证
+- 工单量少或变化频繁的场景
+- 探索性诊断（问题边界模糊）
+- 对灵活性要求高于可靠性的场景
 
-## 三、优缺点分析
+### 3.3 未来展望：两种方法的结合
 
-### 3.1 优点
-
-1. **架构大幅简化**
-   - 去掉 phenomenon 聚类、hypothesis tracking、recommender 打分等复杂模块
-   - 核心逻辑可能只需 100-200 行代码
-
-2. **灵活性高**
-   - LLM 可以自由组合不同工单的信息
-   - 不受预定义 phenomenon 的限制
-   - 能理解用户自然语言描述的微妙差异
-
-3. **无需预处理**
-   - 不需要 rebuild-index 生成 phenomena/root_causes
-   - 直接使用原始工单数据
-
-4. **易于迭代**
-   - 改进主要通过调整 prompt 实现
-   - 不需要修改复杂的算法逻辑
-
-### 3.2 缺点与风险
-
-| 问题 | 风险等级 | 说明 | 缓解措施 |
-|------|----------|------|----------|
-| **RAG 召回质量** | 高 | 用户描述模糊时检索不准 | 多阶段检索、query 扩展 |
-| **上下文长度限制** | 中 | 工单多时超出 context window | 截断、摘要、分批处理 |
-| **一致性问题** | 中 | 重复推荐已问过的现象 | 结构化状态追踪 + guardrails |
-| **判断时机不当** | 高 | 过早给结论或过晚收敛 | prompt 工程 + 置信度阈值 |
-| **可解释性下降** | 中 | 推理过程是黑盒 | 要求 LLM 输出 reasoning |
-| **Hallucination** | 高 | 编造不存在的现象或方案 | 引用校验 + 结构化输出 |
-| **成本问题** | 低 | 每轮调用 LLM | 可接受，按需优化 |
+| 结合思路 | 说明 |
+|---------|------|
+| **Hybrid 决策** | 图谱方法追踪状态 + 检索方法辅助判断 |
+| **Fallback 机制** | 图谱方法为主，低置信度时切换到检索方法 |
+| **LLM 增强图谱** | 保持图谱架构，用 LLM 增强现象匹配和响应生成 |
+| **图谱验证检索** | 用图谱方法的规则作为 Guardrails 约束检索方法输出 |
 
 ---
 
@@ -136,8 +185,8 @@
 
 ```python
 @dataclass
-class NaiveSessionState:
-    """简化版会话状态"""
+class RARSessionState:
+    """检索方法会话状态"""
     session_id: str
     user_problem: str                    # 用户原始问题
 
@@ -231,7 +280,7 @@ class NaiveSessionState:
 #### 4.4.1 检索 Query 构建
 
 ```python
-def build_search_query(state: NaiveSessionState, user_message: str) -> str:
+def build_search_query(state: RARSessionState, user_message: str) -> str:
     """构建检索 query"""
     parts = [state.user_problem]
 
@@ -267,7 +316,7 @@ def retrieve_tickets(query: str, top_k: int = 10) -> List[RawTicket]:
 ```python
 def apply_guardrails(
     llm_output: dict,
-    state: NaiveSessionState,
+    state: RARSessionState,
     retrieved_tickets: List[RawTicket],
 ) -> dict:
     """后处理检查"""
@@ -306,10 +355,10 @@ def apply_guardrails(
 ```
 dbdiag/
 ├── core/
-│   ├── naive_dialogue_manager.py  # 新增：简化版对话管理器
+│   ├── rar_dialogue_manager.py    # 新增：检索方法对话管理器
 │   └── ...                        # 现有文件不变
 ├── cli/
-│   └── main.py                    # 可选：添加 --naive 开关
+│   └── main.py                    # 可选：添加 --rar 开关
 └── ...
 ```
 
@@ -317,16 +366,16 @@ dbdiag/
 
 | 步骤 | 内容 | 预计工作量 |
 |------|------|-----------|
-| 1 | 实现 `NaiveSessionState` 数据结构 | 小 |
+| 1 | 实现 `RARSessionState` 数据结构 | 小 |
 | 2 | 实现 RAG 检索（复用现有 EmbeddingService） | 小 |
 | 3 | 设计并调试 LLM Prompt | 中 |
 | 4 | 实现 Guardrails | 小 |
-| 5 | 集成到 CLI（添加 `--naive` 开关或新命令） | 小 |
+| 5 | 集成到 CLI（添加 `--rar` 开关或新命令） | 小 |
 | 6 | 测试与对比评估 | 中 |
 
 ### 5.3 评估指标
 
-与现有 V2 方案对比：
+与图谱方法对比：
 
 - **定位准确率**：最终给出的根因是否正确
 - **平均对话轮次**：多少轮能定位到根因
@@ -426,7 +475,7 @@ def format_tickets_for_context(
 ```python
 MAX_TURNS = 5
 
-def check_force_diagnose(state: NaiveSessionState) -> bool:
+def check_force_diagnose(state: RARSessionState) -> bool:
     """检查是否需要强制诊断"""
     if state.dialogue_turns >= MAX_TURNS:
         return True
@@ -447,7 +496,7 @@ def check_force_diagnose(state: NaiveSessionState) -> bool:
 #### 6.3.3 无进展检测
 
 ```python
-def detect_no_progress(state: NaiveSessionState) -> bool:
+def detect_no_progress(state: RARSessionState) -> bool:
     """检测是否无进展（连续 2 轮用户否定所有推荐）"""
     if len(state.recent_feedbacks) < 2:
         return False
@@ -463,18 +512,18 @@ if detect_no_progress(state):
 
 ---
 
-### 6.4 与现有方案的切换
+### 6.4 与图谱方法的切换
 
 **问题**：是否支持运行时切换？
 
 **建议方案：独立实现，通过 CLI 参数切换**
 
 ```bash
-# 现有 V2 方案（默认）
+# 图谱方法（默认）
 python -m dbdiag cli
 
-# Naive 方案（实验性）
-python -m dbdiag cli --naive
+# 检索方法（实验性）
+python -m dbdiag cli --rar
 ```
 
 **实现方式**：
@@ -484,14 +533,14 @@ python -m dbdiag cli --naive
 import click
 
 @click.command()
-@click.option('--naive', is_flag=True, help='使用简化版 RAG+LLM 诊断')
-def chat(naive: bool):
-    if naive:
-        from dbdiag.core.naive_dialogue_manager import NaiveDialogueManager
-        manager = NaiveDialogueManager(db_path, llm_service, embedding_service)
+@click.option('--rar', is_flag=True, help='使用检索增强推理方法（实验性）')
+def chat(rar: bool):
+    if rar:
+        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        manager = RARDialogueManager(db_path, llm_service, embedding_service)
     else:
-        from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
-        manager = PhenomenonDialogueManager(db_path, llm_service, embedding_service)
+        from dbdiag.core.dialogue_manager import GARDialogueManager
+        manager = GARDialogueManager(db_path, llm_service, embedding_service)
 
     cli = RichCLI(manager)
     cli.run()
@@ -500,15 +549,4 @@ def chat(naive: bool):
 **优势**：
 - 两套代码完全独立，互不影响
 - 方便 A/B 对比测试
-- 如果 naive 效果好，未来可以替换默认方案
-
----
-
-## 七、结论
-
-本提案的 naive 方案适合：
-- 快速验证 RAG + LLM 端到端诊断的可行性
-- 作为现有复杂架构的简化备选方案
-- 小规模工单数据场景
-
-建议先实现 prototype，与现有 V2 方案进行 A/B 对比，再决定是否正式采用。
+- 如果检索方法效果好，未来可以替换默认方案

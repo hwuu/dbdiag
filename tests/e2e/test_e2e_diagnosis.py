@@ -9,7 +9,7 @@ import sys
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
+from dbdiag.core.dialogue_manager import GARDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -25,7 +25,7 @@ def dialogue_manager():
     llm_service = LLMService(config)
     embedding_service = EmbeddingService(config)
 
-    return PhenomenonDialogueManager(db_path, llm_service, embedding_service)
+    return GARDialogueManager(db_path, llm_service, embedding_service)
 
 
 class TestE2EDiagnosis:

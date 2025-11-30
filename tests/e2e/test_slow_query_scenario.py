@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
+from dbdiag.core.dialogue_manager import GARDialogueManager
 from dbdiag.utils.config import load_config
 
 
@@ -22,7 +22,7 @@ def dialogue_manager():
     llm_service = LLMService(config)
     embedding_service = EmbeddingService(config)
 
-    return PhenomenonDialogueManager(db_path, llm_service, embedding_service)
+    return GARDialogueManager(db_path, llm_service, embedding_service)
 
 
 def test_slow_query_diagnosis_flow(dialogue_manager):

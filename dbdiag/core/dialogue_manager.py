@@ -19,10 +19,10 @@ from dbdiag.services.llm_service import LLMService
 from dbdiag.utils.config import RecommenderConfig
 
 
-class PhenomenonDialogueManager:
-    """基于现象的对话管理器
+class GARDialogueManager:
+    """图谱增强推理对话管理器 (Graph-Augmented-Reasoning)
 
-    使用 phenomena 和 ticket_anomalies 进行诊断对话。
+    使用 phenomena 和 ticket_phenomena 构建的知识图谱进行诊断对话。
     """
 
     def __init__(

@@ -836,7 +836,7 @@ def generate_diagnosis_summary(
 **引用工单：** [T-0001] [T-0005]
 ```
 
-### 4.5 对话管理器 (PhenomenonDialogueManager)
+### 4.5 对话管理器 (GARDialogueManager)
 
 **文件**: `dbdiag/core/dialogue_manager.py`
 
@@ -863,7 +863,7 @@ continue_conversation(session_id, user_message)
 **核心方法**:
 
 ```python
-class PhenomenonDialogueManager:
+class GARDialogueManager:
     def __init__(self, db_path, llm_service, embedding_service):
         self.hypothesis_tracker = PhenomenonHypothesisTracker(...)
         self.recommender = PhenomenonRecommendationEngine(...)

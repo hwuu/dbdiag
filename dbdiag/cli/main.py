@@ -17,7 +17,7 @@ from rich.text import Text
 from rich import box
 import rich.markdown
 
-from dbdiag.core.dialogue_manager import PhenomenonDialogueManager
+from dbdiag.core.dialogue_manager import GARDialogueManager
 from dbdiag.dao import RootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
@@ -57,7 +57,7 @@ class RichCLI:
         self.embedding_service = EmbeddingService(self.config)
 
         # 对话管理器
-        self.dialogue_manager = PhenomenonDialogueManager(
+        self.dialogue_manager = GraphBasedDialogueManager(
             self.db_path, self.llm_service, self.embedding_service,
             progress_callback=self._print_progress,
             recommender_config=self.config.recommender,
