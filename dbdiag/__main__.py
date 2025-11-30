@@ -1,11 +1,13 @@
 """dbdiag 命令行入口
 
 使用方式：
-    python -m dbdiag cli            # 启动交互式 CLI 诊断
+    python -m dbdiag cli            # 启动交互式 CLI 诊断（图谱方法）
+    python -m dbdiag cli --rar      # 启动交互式 CLI 诊断（检索方法，实验性）
     python -m dbdiag api            # 启动 FastAPI 服务
     python -m dbdiag init           # 初始化数据库
     python -m dbdiag import         # 导入工单数据
-    python -m dbdiag rebuild-index  # 重建向量索引
+    python -m dbdiag rebuild-index  # 重建向量索引（图谱方法用）
+    python -m dbdiag init-rar-index # 初始化 RAR 索引（检索方法用）
     python -m dbdiag visualize      # 生成知识图谱可视化
 """
 import sys
@@ -21,10 +23,15 @@ def main():
 
 
 @main.command("cli")
-def interactive_cli():
+@click.option(
+    "--rar",
+    is_flag=True,
+    help="使用检索增强推理方法（实验性）",
+)
+def interactive_cli(rar: bool):
     """启动交互式命令行诊断（推荐）"""
     from dbdiag.cli.main import main as cli_main
-    cli_main()
+    cli_main(use_rar=rar)
 
 
 @main.command("api")
@@ -110,6 +117,28 @@ def rebuild_index(db: str, config: str):
         do_rebuild(db, config)
     except Exception as e:
         click.echo(f"\n[ERROR] 重建失败: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("init-rar-index")
+@click.option(
+    "--db",
+    default=None,
+    help="数据库文件路径（默认: data/tickets.db）",
+)
+@click.option(
+    "--config",
+    default=None,
+    help="配置文件路径（默认: config.yaml）",
+)
+def init_rar_index(db: str, config: str):
+    """初始化 RAR 索引（从 raw_tickets 生成 rar_raw_tickets）"""
+    from dbdiag.scripts.init_rar_index import init_rar_index as do_init
+
+    try:
+        do_init(db, config)
+    except Exception as e:
+        click.echo(f"\n[ERROR] 初始化失败: {e}", err=True)
         sys.exit(1)
 
 

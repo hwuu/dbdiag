@@ -222,6 +222,26 @@ class TestInitDatabase:
             assert result is not None
             assert result[0] == "T001"
 
+    def test_rar_raw_tickets_table_structure(self):
+        """测试:rar_raw_tickets 表结构（RAR 方法用）"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            init_database(db_path)
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(rar_raw_tickets)")
+            columns = {row[1]: row[2] for row in cursor.fetchall()}
+            conn.close()
+
+            assert "ticket_id" in columns
+            assert "description" in columns
+            assert "root_cause" in columns
+            assert "solution" in columns
+            assert "combined_text" in columns
+            assert "embedding" in columns
+            assert "created_at" in columns
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

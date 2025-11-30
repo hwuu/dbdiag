@@ -2,7 +2,9 @@
 
 使用 Rich 库美化 CLI 输出。
 
-运行方式：python -m dbdiag cli
+运行方式：
+    python -m dbdiag cli       # 图谱增强推理方法（默认）
+    python -m dbdiag cli --rar # 检索增强推理方法（实验性）
 """
 from pathlib import Path
 from typing import Optional
@@ -38,12 +40,12 @@ class RichCLI:
     """Rich CLI"""
 
     LOGO = """
-██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗
-██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝
-██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗
-██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║
-██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝
-╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝
+██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗        ██████╗
+██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██╔════╝
+██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗██║  ███╗
+██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██║   ██║
+██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ╚██████╔╝
+╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝        ╚═════╝
 """
 
     def __init__(self):
@@ -57,7 +59,7 @@ class RichCLI:
         self.embedding_service = EmbeddingService(self.config)
 
         # 对话管理器
-        self.dialogue_manager = GraphBasedDialogueManager(
+        self.dialogue_manager = GARDialogueManager(
             self.db_path, self.llm_service, self.embedding_service,
             progress_callback=self._print_progress,
             recommender_config=self.config.recommender,
@@ -390,9 +392,277 @@ class RichCLI:
             self.console.print(Text("\n再见！\n", style="blue"))
 
 
-def main():
-    """入口"""
-    cli = RichCLI()
+class RARCLI:
+    """RAR CLI (实验性)
+
+    使用检索增强推理方法的简化 CLI。
+    """
+
+    LOGO = """
+██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗       ██████╗
+██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██╔══██╗
+██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗██████╔╝
+██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██╔══██╗
+██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ██║  ██║
+╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝       ╚═╝  ╚═╝
+"""
+
+    def __init__(self):
+        """初始化"""
+        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+
+        self.console = Console()
+        self.config = load_config()
+        self.db_path = str(Path("data") / "tickets.db")
+
+        # 服务
+        self.llm_service = LLMService(self.config)
+        self.embedding_service = EmbeddingService(self.config)
+
+        # RAR 对话管理器
+        self.dialogue_manager = RARDialogueManager(
+            self.db_path, self.llm_service, self.embedding_service
+        )
+
+        # 状态
+        self.session_id: Optional[str] = None
+        self.round_count: int = 0
+
+    def _print_indented(self, content, num_spaces: int = 2) -> None:
+        """打印带缩进的 Rich 对象"""
+        from rich.padding import Padding
+        self.console.print(Padding(content, (0, 0, 0, num_spaces)))
+
+    def _render_recommendation(self, response: dict):
+        """渲染推荐响应"""
+        recommendations = response.get("recommendations", [])
+        reasoning = response.get("reasoning", "")
+        confidence = response.get("confidence", 0.0)
+
+        # 置信度
+        self._print_indented(Text(f"置信度: {confidence:.0%}", style="dim"))
+        self.console.print()
+
+        if reasoning:
+            self._print_indented(Text(f"分析: {reasoning}", style="italic"))
+            self.console.print()
+
+        if recommendations:
+            self._print_indented(Text(f"建议检查以下 {len(recommendations)} 个现象：", style="bold yellow"))
+            self.console.print()
+
+            for i, rec in enumerate(recommendations, 1):
+                obs = rec.get("observation", "")
+                method = rec.get("method", "")
+                why = rec.get("why", "")
+                related = rec.get("related_root_causes", [])
+
+                # 标题
+                title = Text()
+                title.append(f"[{i}] ", style="bold yellow")
+                title.append(obs, style="bold")
+                self._print_indented(title)
+
+                # 观察方法
+                if method:
+                    self._print_indented(Text(f"方法: {method}", style="dim"), num_spaces=6)
+
+                # 原因
+                if why:
+                    self._print_indented(Text(f"原因: {why}", style="italic"), num_spaces=6)
+
+                # 相关根因
+                if related:
+                    self._print_indented(Text(f"可能根因: {', '.join(related)}", style="cyan"), num_spaces=6)
+
+                self.console.print()
+
+            self._print_indented(Text("请检查上述现象并反馈结果（如：1确认 2否定）", style="bold yellow"))
+        else:
+            self._print_indented(Text("暂无推荐，请提供更多信息", style="yellow"))
+
+    def _render_diagnosis(self, response: dict):
+        """渲染诊断响应"""
+        root_cause = response.get("root_cause", "未知")
+        confidence = response.get("confidence", 0.0)
+        reasoning = response.get("reasoning", "")
+        solution = response.get("solution", "")
+        cited_tickets = response.get("cited_tickets", [])
+        forced = response.get("forced", False)
+
+        content_parts = []
+
+        # 根因
+        info = Text()
+        info.append("根因: ", style="bold")
+        info.append(f"{root_cause}\n", style="green bold")
+        content_parts.append(info)
+
+        # 置信度
+        conf_text = Text()
+        conf_text.append("置信度: ", style="bold")
+        conf_text.append(f"{confidence:.0%}", style="yellow" if confidence < 0.7 else "green")
+        if forced:
+            conf_text.append(" (强制诊断)", style="red")
+        content_parts.append(conf_text)
+        content_parts.append(Text(""))
+
+        # 分析
+        if reasoning:
+            content_parts.append(Text("分析:", style="bold"))
+            content_parts.append(Text(reasoning))
+            content_parts.append(Text(""))
+
+        # 解决方案
+        if solution:
+            content_parts.append(Text("解决方案:", style="bold"))
+            content_parts.append(Markdown(solution))
+            content_parts.append(Text(""))
+
+        # 引用工单
+        if cited_tickets:
+            content_parts.append(Text(f"参考工单: {', '.join(cited_tickets)}", style="cyan"))
+
+        panel = Panel(
+            Group(*content_parts),
+            title="✓ 诊断结论" if not forced else "⚠ 诊断结论（信息不足）",
+            title_align="left",
+            border_style="green" if not forced else "yellow",
+            width=min(100, self.console.width),
+            padding=(1, 2),
+        )
+        self._print_indented(panel)
+
+    def _handle_message(self, user_message: str) -> bool:
+        """处理用户消息，返回 True 表示诊断完成"""
+        try:
+            self.console.print()
+            self.console.print(Text.from_markup(f"[bold]• 第 {self.round_count + 1} 轮[/bold]"))
+            self.round_count += 1
+
+            if not self.session_id:
+                self._print_indented(Text("正在分析问题...", style="dim"))
+                self.session_id = self.dialogue_manager.start_session(user_message)
+                response = self.dialogue_manager.process_message(user_message)
+            else:
+                # 解析用户反馈
+                self._parse_feedback(user_message)
+                self._print_indented(Text("正在处理反馈...", style="dim"))
+                response = self.dialogue_manager.process_message(user_message)
+
+            self.console.print()
+
+            action = response.get("action", "")
+            if action == "recommend":
+                self._render_recommendation(response)
+                return False
+            elif action == "diagnose":
+                self._render_diagnosis(response)
+                return True
+            else:
+                self._print_indented(Text(str(response)))
+                return False
+
+        except Exception as e:
+            self._print_indented(Text(f"处理失败: {str(e)}", style="red"))
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _parse_feedback(self, message: str):
+        """解析用户反馈并更新状态"""
+        import re
+        # 解析 "1确认 2否定" 格式
+        confirm_pattern = re.findall(r"(\d+)\s*确认", message)
+        deny_pattern = re.findall(r"(\d+)\s*否定", message)
+
+        # 这里简化处理，假设用户直接描述观察结果
+        # 实际应该根据推荐的索引来确认/否定
+        if "确认" in message and "否定" not in message:
+            # 全部确认
+            self.dialogue_manager.confirm_observation(message)
+        elif "否定" in message:
+            self.dialogue_manager.deny_observation(message)
+
+    def _handle_command(self, command: str) -> bool:
+        """处理命令，返回 True 表示退出"""
+        command = command.lower().strip()
+
+        if command == "/help":
+            help_text = """
+**RAR 模式可用命令：**
+- `/help` - 显示此帮助
+- `/reset` - 重新开始诊断
+- `/exit` - 退出程序
+
+直接输入问题描述或检查结果即可继续诊断。
+            """
+            self.console.print(Panel(Markdown(help_text.strip()), title="帮助", title_align="left", border_style="blue"))
+            return False
+
+        elif command == "/reset":
+            self.session_id = None
+            self.round_count = 0
+            self.dialogue_manager.state = None
+            self.console.print(Text("已重置会话，请重新描述问题", style="green"))
+            return False
+
+        elif command == "/exit":
+            self.console.print(Text("再见！", style="blue"))
+            return True
+
+        else:
+            text = Text()
+            text.append(f"未知命令: {command}", style="red")
+            text.append("，输入 /help 查看可用命令")
+            self.console.print(text)
+            return False
+
+    def run(self):
+        """运行 CLI 主循环"""
+        # 欢迎信息
+        self.console.print()
+        self.console.print(Text(self.LOGO.strip(), style="bold magenta"))
+        self.console.print(Text("检索增强推理方法（实验性）", style="bold magenta"))
+        self.console.print(Text("可用命令: /help /reset /exit", style="dim"))
+        self.console.print()
+        self.console.print(Text("请描述您遇到的数据库问题开始诊断。", style="bold yellow"))
+        self.console.print()
+
+        try:
+            while True:
+                try:
+                    user_input = self.console.input("[bold magenta]> [/bold magenta]").strip()
+                except EOFError:
+                    self.console.print(Text("\n再见！\n", style="blue"))
+                    break
+
+                if not user_input:
+                    continue
+
+                if user_input.startswith("/"):
+                    if self._handle_command(user_input):
+                        break
+                    continue
+
+                if self._handle_message(user_input):
+                    self.console.print(Text("\n再见！\n", style="blue"))
+                    break
+
+        except KeyboardInterrupt:
+            self.console.print(Text("\n再见！\n", style="blue"))
+
+
+def main(use_rar: bool = False):
+    """入口
+
+    Args:
+        use_rar: 是否使用 RAR 方法
+    """
+    if use_rar:
+        cli = RARCLI()
+    else:
+        cli = RichCLI()
     cli.run()
 
 

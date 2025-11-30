@@ -168,6 +168,22 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 -- 为 sessions 创建索引
 CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
+
+-- ============================================
+-- RAR (检索增强推理) 方法专用表
+-- ============================================
+
+-- RAR 工单表（带向量索引）
+CREATE TABLE IF NOT EXISTS rar_raw_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    description TEXT NOT NULL,         -- 问题描述
+    root_cause TEXT NOT NULL,          -- 根因
+    solution TEXT NOT NULL,            -- 解决方案
+    combined_text TEXT NOT NULL,       -- 拼接文本（用于生成 embedding）
+    embedding BLOB,                    -- 向量表示
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ticket_id) REFERENCES raw_tickets(ticket_id)
+);
 """
 
 
