@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
 from dbdiag.models import SessionState, ConfirmedPhenomenon, Hypothesis
-from dbdiag.core.response_generator import ResponseGenerator
+from dbdiag.core.gar.response_generator import ResponseGenerator
 from dbdiag.utils.vector_utils import serialize_f32
 
 

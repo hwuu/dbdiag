@@ -10,9 +10,9 @@ from dbdiag.models import (
     SessionState, ConfirmedPhenomenon, DialogueMessage, Phenomenon,
     RecommendedPhenomenon, DeniedPhenomenon
 )
-from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
-from dbdiag.core.recommender import PhenomenonRecommendationEngine
-from dbdiag.core.response_generator import ResponseGenerator
+from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
+from dbdiag.core.gar.recommender import PhenomenonRecommendationEngine
+from dbdiag.core.gar.response_generator import ResponseGenerator
 from dbdiag.dao import PhenomenonDAO
 from dbdiag.services.session_service import SessionService
 from dbdiag.services.llm_service import LLMService

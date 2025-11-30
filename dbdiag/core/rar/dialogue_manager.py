@@ -6,8 +6,8 @@ import json
 import uuid
 from typing import Dict, Any, Optional, List
 
-from dbdiag.core.rar_session_state import RARSessionState
-from dbdiag.core.rar_retriever import RARRetriever, RARTicket
+from dbdiag.models.rar import RARSessionState
+from dbdiag.core.rar.retriever import RARRetriever, RARTicket
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 

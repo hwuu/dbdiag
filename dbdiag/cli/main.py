@@ -19,7 +19,7 @@ from rich.text import Text
 from rich import box
 import rich.markdown
 
-from dbdiag.core.dialogue_manager import GARDialogueManager
+from dbdiag.core.gar.dialogue_manager import GARDialogueManager
 from dbdiag.dao import RootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
@@ -409,7 +409,7 @@ class RARCLI:
 
     def __init__(self):
         """初始化"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         self.console = Console()
         self.config = load_config()
@@ -480,6 +480,7 @@ class RARCLI:
             self._print_indented(Text("请检查上述现象并反馈结果（如：1确认 2否定）", style="bold yellow"))
         else:
             self._print_indented(Text("暂无推荐，请提供更多信息", style="yellow"))
+        self._print_indented(Text(""))
 
     def _render_diagnosis(self, response: dict):
         """渲染诊断响应"""

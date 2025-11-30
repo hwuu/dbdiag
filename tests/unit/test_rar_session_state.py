@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dbdiag.core.rar_session_state import RARSessionState
+from dbdiag.models.rar import RARSessionState
 
 
 class TestRARSessionState:

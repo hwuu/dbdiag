@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
-from dbdiag.core.rar_session_state import RARSessionState
+from dbdiag.models.rar import RARSessionState
 
 
 class TestRARDialogueManager:
@@ -73,7 +73,7 @@ class TestRARDialogueManager:
 
     def test_start_session(self, temp_db_with_data, mock_services):
         """测试:启动新会话"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
         manager = RARDialogueManager(temp_db_with_data, mock_llm, mock_embedding)
@@ -86,7 +86,7 @@ class TestRARDialogueManager:
 
     def test_process_message_recommend(self, temp_db_with_data, mock_services):
         """测试:处理消息返回推荐"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
 
@@ -116,7 +116,7 @@ class TestRARDialogueManager:
 
     def test_process_message_diagnose(self, temp_db_with_data, mock_services):
         """测试:处理消息返回诊断"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
 
@@ -142,7 +142,7 @@ class TestRARDialogueManager:
 
     def test_increment_turn_on_process(self, temp_db_with_data, mock_services):
         """测试:处理消息后轮次增加"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
         mock_llm.generate_simple.return_value = json.dumps({
@@ -165,7 +165,7 @@ class TestRARDialogueManager:
 
     def test_confirm_observation(self, temp_db_with_data, mock_services):
         """测试:确认观察"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
         manager = RARDialogueManager(temp_db_with_data, mock_llm, mock_embedding)
@@ -177,7 +177,7 @@ class TestRARDialogueManager:
 
     def test_deny_observation(self, temp_db_with_data, mock_services):
         """测试:否定观察"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
         manager = RARDialogueManager(temp_db_with_data, mock_llm, mock_embedding)
@@ -189,7 +189,7 @@ class TestRARDialogueManager:
 
     def test_force_diagnose_after_max_turns(self, temp_db_with_data, mock_services):
         """测试:超过最大轮次强制诊断"""
-        from dbdiag.core.rar_dialogue_manager import RARDialogueManager
+        from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
 

@@ -9,7 +9,7 @@ import sys
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dbdiag.core.dialogue_manager import GARDialogueManager
+from dbdiag.core.gar.dialogue_manager import GARDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config

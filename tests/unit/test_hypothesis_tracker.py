@@ -100,7 +100,7 @@ class TestPhenomenonHypothesisTracker:
             mock_llm = Mock()
             mock_llm.generate_simple.return_value = "0.7"
 
-            from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
+            from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)
 
             session = SessionState(
@@ -124,7 +124,7 @@ class TestPhenomenonHypothesisTracker:
             mock_llm = Mock()
             mock_llm.generate_simple.return_value = "0.7"
 
-            from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
+            from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)
 
             session = SessionState(
@@ -147,7 +147,7 @@ class TestPhenomenonHypothesisTracker:
 
             mock_llm = Mock()
 
-            from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
+            from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)
 
             # 先不带 confirmed_phenomena
@@ -182,7 +182,7 @@ class TestPhenomenonHypothesisTracker:
             mock_llm = Mock()
             mock_llm.generate_simple.return_value = "0.7"
 
-            from dbdiag.core.hypothesis_tracker import PhenomenonHypothesisTracker
+            from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)
 
             session = SessionState(

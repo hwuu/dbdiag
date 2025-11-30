@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import List, Optional
 
-from dbdiag.core.rar_session_state import RARSessionState
+from dbdiag.models.rar import RARSessionState
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.vector_utils import deserialize_f32, cosine_similarity
 

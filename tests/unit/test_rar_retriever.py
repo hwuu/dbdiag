@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
-from dbdiag.core.rar_session_state import RARSessionState
+from dbdiag.models.rar import RARSessionState
 
 
 class TestRARRetriever:
@@ -73,7 +73,7 @@ class TestRARRetriever:
 
     def test_build_search_query_basic(self):
         """测试:构建基础检索 query"""
-        from dbdiag.core.rar_retriever import RARRetriever
+        from dbdiag.core.rar.retriever import RARRetriever
 
         state = RARSessionState(
             session_id="test-001",
@@ -87,7 +87,7 @@ class TestRARRetriever:
 
     def test_build_search_query_with_observations(self):
         """测试:构建带观察的检索 query"""
-        from dbdiag.core.rar_retriever import RARRetriever
+        from dbdiag.core.rar.retriever import RARRetriever
 
         state = RARSessionState(
             session_id="test-001",
@@ -104,7 +104,7 @@ class TestRARRetriever:
 
     def test_retrieve_tickets(self, temp_db_with_data):
         """测试:检索工单"""
-        from dbdiag.core.rar_retriever import RARRetriever
+        from dbdiag.core.rar.retriever import RARRetriever
 
         # Mock embedding service
         mock_embedding_service = Mock()
@@ -124,7 +124,7 @@ class TestRARRetriever:
 
     def test_retrieve_returns_sorted_by_similarity(self, temp_db_with_data):
         """测试:检索结果按相似度排序"""
-        from dbdiag.core.rar_retriever import RARRetriever
+        from dbdiag.core.rar.retriever import RARRetriever
 
         # Mock embedding service - 返回与第一条工单相似的向量
         mock_embedding_service = Mock()
@@ -146,7 +146,7 @@ class TestRARRetriever:
 
     def test_retrieve_empty_db(self):
         """测试:空数据库检索返回空列表"""
-        from dbdiag.core.rar_retriever import RARRetriever
+        from dbdiag.core.rar.retriever import RARRetriever
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")

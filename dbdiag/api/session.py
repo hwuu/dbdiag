@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
 
-from dbdiag.core.dialogue_manager import GARDialogueManager
+from dbdiag.core.gar.dialogue_manager import GARDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config

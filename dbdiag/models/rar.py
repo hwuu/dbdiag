@@ -1,6 +1,7 @@
-"""RAR 会话状态
+"""RAR (检索增强推理) 会话模型
 
-检索增强推理方法的会话状态管理。
+本模块定义 RAR 方法的会话状态相关模型：
+- RARSessionState: RAR 会话状态
 """
 from dataclasses import dataclass, field
 from typing import List, Set, Dict, Any

@@ -6,7 +6,7 @@ from typing import List, Set, Dict, Optional
 from collections import defaultdict
 
 from dbdiag.models import SessionState, Hypothesis, Phenomenon
-from dbdiag.core.retriever import PhenomenonRetriever
+from dbdiag.core.gar.retriever import PhenomenonRetriever
 from dbdiag.dao import TicketDAO, TicketPhenomenonDAO, PhenomenonRootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
