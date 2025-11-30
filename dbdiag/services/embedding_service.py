@@ -2,7 +2,8 @@
 
 使用 OpenAI SDK 调用兼容 OpenAI API 的 Embedding 服务
 """
-from typing import List
+import time
+from typing import List, Callable, Optional
 import openai
 from dbdiag.utils.config import Config
 
@@ -50,28 +51,37 @@ class EmbeddingService:
 
         return embedding
 
-    def encode_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+    def encode_batch(
+        self,
+        texts: List[str],
+        batch_size: int = 32,
+        progress_callback: Optional[Callable[[int, int, float], None]] = None,
+    ) -> List[List[float]]:
         """
         批量编码文本为向量
 
         Args:
             texts: 待编码的文本列表
             batch_size: 批次大小
+            progress_callback: 进度回调函数，参数为 (已完成数, 总数, 本批耗时)
 
         Returns:
             向量列表
         """
         all_embeddings = []
+        total = len(texts)
 
         # 分批处理
-        for i in range(0, len(texts), batch_size):
+        for i in range(0, total, batch_size):
             batch = texts[i : i + batch_size]
 
+            start_time = time.time()
             response = self.client.embeddings.create(
                 model=self.model,
                 input=batch,
                 dimensions=self.dimension,  # 指定输出维度
             )
+            elapsed = time.time() - start_time
 
             # 提取 embeddings
             batch_embeddings = [item.embedding for item in response.data]
@@ -84,5 +94,9 @@ class EmbeddingService:
                     )
 
             all_embeddings.extend(batch_embeddings)
+
+            # 进度回调
+            if progress_callback:
+                progress_callback(len(all_embeddings), total, elapsed)
 
         return all_embeddings

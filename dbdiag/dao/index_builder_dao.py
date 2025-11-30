@@ -20,14 +20,20 @@ class IndexBuilderDAO(BaseDAO):
         phenomena: List[Dict[str, Any]],
         raw_anomalies: List[Dict[str, Any]],
         anomaly_to_phenomenon: Dict[str, str],
+        raw_root_causes: List[Dict[str, Any]],
+        root_causes: List[Dict[str, Any]],
+        raw_rc_to_standard: Dict[str, str],
     ) -> Dict[str, int]:
         """
         重建所有索引表
 
         Args:
-            phenomena: 现象列表
+            phenomena: 标准现象列表
             raw_anomalies: 原始异常列表
             anomaly_to_phenomenon: 异常ID到现象ID的映射
+            raw_root_causes: 原始根因列表（聚类前）
+            root_causes: 标准根因列表（聚类后）
+            raw_rc_to_standard: 原始根因ID到标准根因ID的映射
 
         Returns:
             统计信息字典
@@ -39,6 +45,8 @@ class IndexBuilderDAO(BaseDAO):
                 cursor.execute("DELETE FROM phenomenon_root_causes")
                 cursor.execute("DELETE FROM ticket_phenomena")
                 cursor.execute("DELETE FROM phenomena")
+                cursor.execute("DELETE FROM raw_root_causes")
+                cursor.execute("DELETE FROM root_causes")
 
                 # 2. 保存 phenomena
                 for p in phenomena:
@@ -73,18 +81,52 @@ class IndexBuilderDAO(BaseDAO):
                         anomaly["id"],
                     ))
 
-                # 4. 构建 root_causes 表
-                root_cause_map = self._build_root_causes(cursor)
+                # 4. 保存 raw_root_causes
+                for rrc in raw_root_causes:
+                    cursor.execute("""
+                        INSERT INTO raw_root_causes (
+                            id, description, solution, source_ticket_ids,
+                            ticket_count, embedding
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        rrc["id"],
+                        rrc["description"],
+                        rrc["solution"],
+                        json.dumps(rrc["source_ticket_ids"]),
+                        rrc["ticket_count"],
+                        serialize_f32(rrc["embedding"]) if rrc.get("embedding") else None,
+                    ))
 
-                # 5. 同步到 tickets 表
-                self._sync_to_tickets(cursor, root_cause_map)
+                # 5. 保存 root_causes（聚类后的标准根因）
+                for rc in root_causes:
+                    cursor.execute("""
+                        INSERT INTO root_causes (
+                            root_cause_id, description, solution,
+                            source_raw_root_cause_ids, cluster_size,
+                            related_ticket_ids, ticket_count, embedding
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        rc["root_cause_id"],
+                        rc["description"],
+                        rc["solution"],
+                        json.dumps(rc["source_raw_root_cause_ids"]),
+                        rc["cluster_size"],
+                        json.dumps(rc["related_ticket_ids"]),
+                        rc["ticket_count"],
+                        serialize_f32(rc["embedding"]) if rc.get("embedding") else None,
+                    ))
 
-                # 6. 构建 phenomenon_root_causes 表
+                # 6. 同步到 tickets 表
+                self._sync_to_tickets_v2(cursor, raw_root_causes, raw_rc_to_standard)
+
+                # 7. 构建 phenomenon_root_causes 表
                 self._build_phenomenon_root_causes(cursor)
 
                 conn.commit()
 
-                # 7. 统计
+                # 8. 统计
                 stats = self._get_stats(cursor)
                 return stats
 
@@ -190,6 +232,58 @@ class IndexBuilderDAO(BaseDAO):
                 solution,
             ))
 
+    def _sync_to_tickets_v2(
+        self,
+        cursor,
+        raw_root_causes: List[Dict[str, Any]],
+        raw_rc_to_standard: Dict[str, str],
+    ) -> None:
+        """
+        同步数据到 tickets 表，使用新的根因映射
+
+        Args:
+            cursor: 数据库游标
+            raw_root_causes: 原始根因列表
+            raw_rc_to_standard: 原始根因ID到标准根因ID的映射
+        """
+        # 构建 root_cause_text -> root_cause_id 映射
+        # 通过 raw_root_causes 和 raw_rc_to_standard 推导
+        root_cause_text_to_id: Dict[str, str] = {}
+        for rrc in raw_root_causes:
+            root_cause_text = rrc["description"]
+            raw_rc_id = rrc["id"]
+            standard_rc_id = raw_rc_to_standard.get(raw_rc_id)
+            if standard_rc_id:
+                root_cause_text_to_id[root_cause_text] = standard_rc_id
+
+        # 先清空 tickets 表
+        cursor.execute("DELETE FROM tickets")
+
+        # 从 raw_tickets 读取数据并写入 tickets
+        cursor.execute("""
+            SELECT ticket_id, metadata_json, description, root_cause, solution
+            FROM raw_tickets
+        """)
+
+        for row in cursor.fetchall():
+            ticket_id, metadata_json, description, root_cause_text, solution = row
+            root_cause_id = root_cause_text_to_id.get(root_cause_text)
+
+            cursor.execute("""
+                INSERT INTO tickets (
+                    ticket_id, metadata_json, description,
+                    root_cause_id, root_cause, solution
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                ticket_id,
+                metadata_json or "{}",
+                description,
+                root_cause_id,
+                root_cause_text,
+                solution,
+            ))
+
     def _build_phenomenon_root_causes(self, cursor) -> None:
         """
         从 ticket_phenomena + tickets 推导 phenomenon_root_causes 关联表
@@ -216,6 +310,8 @@ class IndexBuilderDAO(BaseDAO):
         ticket_phenomena_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM phenomenon_root_causes")
         phenomenon_root_causes_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM raw_root_causes")
+        raw_root_causes_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM root_causes")
         root_causes_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM tickets")
@@ -225,6 +321,7 @@ class IndexBuilderDAO(BaseDAO):
             "phenomena": phenomena_count,
             "ticket_phenomena": ticket_phenomena_count,
             "phenomenon_root_causes": phenomenon_root_causes_count,
+            "raw_root_causes": raw_root_causes_count,
             "root_causes": root_causes_count,
             "tickets": tickets_count,
         }

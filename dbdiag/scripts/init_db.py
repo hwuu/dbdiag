@@ -3,7 +3,7 @@
 创建 SQLite 数据库的所有表结构
 
 表结构：
-- 原始数据表：raw_tickets, raw_anomalies
+- 原始数据表：raw_tickets, raw_anomalies, raw_root_causes
 - 处理后数据表：phenomena, ticket_phenomena, phenomenon_root_causes, tickets, root_causes
 - 会话表：sessions
 """
@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS raw_anomalies (
 
 -- 为 raw_anomalies 创建索引
 CREATE INDEX IF NOT EXISTS idx_raw_anomalies_ticket_id ON raw_anomalies(ticket_id);
+
+-- 原始根因表（从 raw_tickets 提取去重）
+CREATE TABLE IF NOT EXISTS raw_root_causes (
+    id TEXT PRIMARY KEY,                       -- 格式: RRC-{序号}
+    description TEXT NOT NULL,                 -- 原始根因描述
+    solution TEXT NOT NULL,                    -- 原始解决方案
+    source_ticket_ids TEXT NOT NULL,           -- 来源工单 ID 列表（JSON 数组）
+    ticket_count INTEGER NOT NULL,             -- 工单数量
+    embedding BLOB,                            -- 向量表示（用于聚类）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- ============================================
 -- V2 处理后数据表（聚类标准化后的数据）
@@ -133,11 +144,13 @@ CREATE TABLE IF NOT EXISTS tickets (
 -- 共享表
 -- ============================================
 
--- 根因表
+-- 根因表（聚类标准化后）
 CREATE TABLE IF NOT EXISTS root_causes (
     root_cause_id TEXT PRIMARY KEY,        -- 格式: RC-{序号}，如 RC-0001
-    description TEXT NOT NULL,             -- 根因描述
-    solution TEXT,                         -- 典型解决方案（聚合自工单）
+    description TEXT NOT NULL,             -- 标准化根因描述（LLM 生成）
+    solution TEXT,                         -- 标准化解决方案（LLM 合并）
+    source_raw_root_cause_ids TEXT,        -- 来源的原始根因 IDs（JSON 数组）
+    cluster_size INTEGER NOT NULL DEFAULT 1, -- 聚类中的原始根因数量
     key_phenomenon_ids TEXT,               -- 关键现象 ID 列表（JSON 数组）
     related_ticket_ids TEXT,               -- 相关工单 ID 列表（JSON 数组）
     ticket_count INTEGER NOT NULL DEFAULT 0, -- 支持该根因的工单数量

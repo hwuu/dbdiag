@@ -273,6 +273,10 @@ DialogueManager (入口)
 原始数据表（raw_tickets, raw_anomalies）
     │
     ▼ rebuild-index（聚类 + LLM 标准化）
+    │  ├─> raw_root_causes（从 raw_tickets 提取去重）
+    │  ├─> phenomena（异常聚类标准化）
+    │  └─> root_causes（根因聚类标准化）
+    │
 处理后数据表（phenomena, tickets, ticket_phenomena, root_causes, phenomenon_root_causes）
 ```
 
@@ -299,6 +303,17 @@ DialogueManager (入口)
 | observation_method | TEXT | 观察方法 |
 | why_relevant | TEXT | 相关性解释 |
 
+**raw_root_causes** - 原始根因（从 raw_tickets 提取去重）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | TEXT PK | 格式: RRC-{序号} |
+| description | TEXT | 原始根因描述 |
+| solution | TEXT | 原始解决方案 |
+| source_ticket_ids | TEXT | 来源工单 ID（JSON 数组） |
+| ticket_count | INTEGER | 工单数量 |
+| embedding | BLOB | 向量表示（用于聚类） |
+
 #### 3.1.2 处理后数据表
 
 **phenomena** - 标准现象库（核心表）：
@@ -312,16 +327,19 @@ DialogueManager (入口)
 | cluster_size | INTEGER | 聚类大小 |
 | embedding | BLOB | 向量表示 |
 
-**root_causes** - 根因表：
+**root_causes** - 根因表（聚类标准化后）：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | root_cause_id | TEXT PK | 格式: RC-{序号} |
-| description | TEXT | 根因描述 |
-| solution | TEXT | 解决方案 |
+| description | TEXT | 标准化根因描述（LLM 生成） |
+| solution | TEXT | 标准化解决方案（LLM 合并） |
+| source_raw_root_cause_ids | TEXT | 来源原始根因 ID（JSON 数组） |
+| cluster_size | INTEGER | 聚类大小 |
 | key_phenomenon_ids | TEXT | 关键现象 ID（JSON） |
 | related_ticket_ids | TEXT | 相关工单 ID（JSON） |
 | ticket_count | INTEGER | 工单数量 |
+| embedding | BLOB | 向量表示 |
 
 **tickets** - 处理后工单表：
 
@@ -948,49 +966,121 @@ python -m dbdiag import data/tickets.json
 **处理流程**:
 
 ```
-1. 读取原始异常 (raw_anomalies)
-       │
-       ▼
-2. 生成向量 (Embedding API)
-       │
-       ▼
-3. 向量聚类 (相似度阈值 0.85)
-       │
-       ▼
-4. LLM 生成标准描述
-       │
-       ▼
-5. 保存 phenomena + ticket_phenomena
-       │
-       ▼
-6. 生成 root_causes + tickets + phenomenon_root_causes
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           rebuild-index 流程                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  [Step 1] 读取原始异常 (raw_anomalies)                                        │
+│       │                                                                      │
+│       ▼                                                                      │
+│  [Step 2] 生成异常向量 (Embedding API)                                        │
+│       │                                                                      │
+│       ▼                                                                      │
+│  [Step 3] 异常向量聚类 (相似度阈值 0.85)                                      │
+│       │                                                                      │
+│       ▼                                                                      │
+│  [Step 4] LLM 生成标准现象描述                                                │
+│       │   - 单项聚类：直接使用原始描述                                        │
+│       │   - 多项聚类：LLM 合并生成标准化描述                                  │
+│       │                                                                      │
+│       ▼                                                                      │
+│  [Step 5] 提取原始根因 (raw_root_causes)                                      │
+│       │   - 从 raw_tickets 按 root_cause 文本去重                             │
+│       │   - 生成根因向量 (Embedding API)                                      │
+│       │                                                                      │
+│       ▼                                                                      │
+│  [Step 6] 根因向量聚类 + LLM 标准化                                           │
+│       │   - 使用相同的 0.85 相似度阈值                                        │
+│       │   - 单项聚类：直接使用原始描述                                        │
+│       │   - 多项聚类：LLM 合并描述 + LLM 合并解决方案                         │
+│       │                                                                      │
+│       ▼                                                                      │
+│  [Step 7] 保存到数据库                                                        │
+│       ├─> raw_root_causes (原始根因)                                          │
+│       ├─> phenomena (标准现象)                                                │
+│       ├─> root_causes (标准根因)                                              │
+│       ├─> ticket_phenomena (工单-现象关联)                                    │
+│       ├─> tickets (处理后工单，含 root_cause_id)                              │
+│       └─> phenomenon_root_causes (现象-根因关联)                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **聚类算法** (贪心聚类):
 
 ```python
 def cluster_by_similarity(items, threshold=0.85):
+    """
+    基于向量相似度的贪心聚类算法
+
+    对每个项：
+    1. 计算与现有所有聚类中心的相似度
+    2. 如果超过阈值，加入最相似的聚类
+    3. 否则创建新聚类
+    """
     clusters = []
     cluster_centers = []
 
     for item in items:
         embedding = item["embedding"]
         matched_cluster = None
+        max_similarity = 0
 
         # 检查与现有聚类的相似度
         for idx, center in enumerate(cluster_centers):
-            if cosine_similarity(embedding, center) > threshold:
+            similarity = cosine_similarity(embedding, center)
+            if similarity > threshold and similarity > max_similarity:
                 matched_cluster = idx
-                break
+                max_similarity = similarity
 
         if matched_cluster is not None:
             clusters[matched_cluster].append(item)
             # 更新聚类中心（增量平均）
+            n = len(clusters[matched_cluster])
+            cluster_centers[matched_cluster] = (
+                (old_center * (n - 1) + embedding) / n
+            )
         else:
             clusters.append([item])
             cluster_centers.append(embedding)
 
     return clusters
+```
+
+**数据转换示例**:
+
+```
+原始数据 (raw_tickets):
+┌─────────────┬─────────────────────────────┬─────────────────────┐
+│ ticket_id   │ root_cause                  │ solution            │
+├─────────────┼─────────────────────────────┼─────────────────────┤
+│ TICKET-001  │ 索引膨胀导致 IO 瓶颈         │ REINDEX + 优化      │
+│ TICKET-002  │ 索引膨胀，查询走全表扫描     │ 重建索引            │
+│ TICKET-003  │ 连接池配置不当               │ 调整连接池大小      │
+└─────────────┴─────────────────────────────┴─────────────────────┘
+
+Step 5: 提取去重 -> raw_root_causes:
+┌───────────┬─────────────────────────────┬────────────┐
+│ id        │ description                 │ ticket_ids │
+├───────────┼─────────────────────────────┼────────────┤
+│ RRC-0001  │ 索引膨胀导致 IO 瓶颈         │ [001]      │
+│ RRC-0002  │ 索引膨胀，查询走全表扫描     │ [002]      │
+│ RRC-0003  │ 连接池配置不当               │ [003]      │
+└───────────┴─────────────────────────────┴────────────┘
+
+Step 6: 向量聚类 (RRC-0001 和 RRC-0002 相似度 > 0.85):
+┌────────────┬─────────────────────────────────────────────────────┐
+│ Cluster 1  │ RRC-0001, RRC-0002 → LLM 合并 → "索引膨胀导致性能问题" │
+│ Cluster 2  │ RRC-0003 → 直接使用 → "连接池配置不当"                 │
+└────────────┴─────────────────────────────────────────────────────┘
+
+Step 7: 生成 root_causes:
+┌───────────┬──────────────────────────┬───────────────────────────┐
+│ id        │ description              │ source_raw_root_cause_ids │
+├───────────┼──────────────────────────┼───────────────────────────┤
+│ RC-0001   │ 索引膨胀导致性能问题      │ [RRC-0001, RRC-0002]      │
+│ RC-0002   │ 连接池配置不当            │ [RRC-0003]                │
+└───────────┴──────────────────────────┴───────────────────────────┘
 ```
 
 **使用方法**:

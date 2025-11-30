@@ -270,11 +270,22 @@ class TestRebuildIndex:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path, _ = self._setup_test_db(tmpdir)
 
-            mock_embeddings = [[0.1] * 3] * 4
+            # 异常 embeddings（4 个）
+            anomaly_embeddings = [[0.1] * 3] * 4
+            # 根因 embeddings（3 个，不同以避免聚类）
+            root_cause_embeddings = [
+                [1.0, 0.0, 0.0],  # 索引膨胀
+                [0.0, 1.0, 0.0],  # IO 瓶颈
+                [0.0, 0.0, 1.0],  # 连接泄漏
+            ]
 
             with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                # encode_batch 被调用两次：先是 anomalies，后是 root_causes
+                mock_embedding_instance.encode_batch.side_effect = [
+                    anomaly_embeddings,
+                    root_cause_embeddings,
+                ]
                 MockEmbedding.return_value = mock_embedding_instance
 
                 with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
@@ -289,7 +300,7 @@ class TestRebuildIndex:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # 测试数据有 3 个不同的 root_cause，应该生成 3 个 root_causes 记录
+            # 测试数据有 3 个不同的 root_cause（embedding 不同），应该生成 3 个 root_causes 记录
             cursor.execute("SELECT COUNT(*) FROM root_causes")
             count = cursor.fetchone()[0]
             assert count == 3
@@ -311,11 +322,22 @@ class TestRebuildIndex:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path, _ = self._setup_test_db(tmpdir)
 
-            mock_embeddings = [[0.1] * 3] * 4
+            # 异常 embeddings（4 个）
+            anomaly_embeddings = [[0.1] * 3] * 4
+            # 根因 embeddings（3 个，不同以避免聚类）
+            root_cause_embeddings = [
+                [1.0, 0.0, 0.0],  # 索引膨胀
+                [0.0, 1.0, 0.0],  # IO 瓶颈
+                [0.0, 0.0, 1.0],  # 连接泄漏
+            ]
 
             with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                # encode_batch 被调用两次：先是 anomalies，后是 root_causes
+                mock_embedding_instance.encode_batch.side_effect = [
+                    anomaly_embeddings,
+                    root_cause_embeddings,
+                ]
                 MockEmbedding.return_value = mock_embedding_instance
 
                 with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
@@ -352,7 +374,7 @@ class TestRebuildIndex:
             assert len(joined_rows) == 3
 
             for row in joined_rows:
-                # root_cause 文本应该与 root_causes.description 一致
+                # 未聚类时，root_cause 文本应该与 root_causes.description 一致
                 assert row["root_cause"] == row["description"]
 
             conn.close()
