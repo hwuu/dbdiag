@@ -270,6 +270,7 @@ DialogueManager (入口)
 原始工单数据（专家标注）
     │
     ▼ import
+    │
 原始数据表（raw_tickets, raw_anomalies）
     │
     ▼ rebuild-index（聚类 + LLM 标准化）
@@ -374,7 +375,7 @@ DialogueManager (入口)
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                          tickets                                 │
-│                      (TICKET-001, ...)                          │
+│                      (T-0001, ...)                              │
 └───────────────────────────┬─────────────────────────────────────┘
                             │ 1:N
                             ▼
@@ -413,7 +414,7 @@ DialogueManager (入口)
 
 ```yaml
 # 工单 1
-ticket_id: TICKET-001
+ticket_id: T-0001
 description: "报表查询变慢"
 root_cause: "索引膨胀导致 IO 瓶颈"
 anomalies:
@@ -421,7 +422,7 @@ anomalies:
   - description: "索引大小增长 6 倍"          #      │
                                               #      │
 # 工单 2                                      #      │
-ticket_id: TICKET-002                         #      │
+ticket_id: T-0002                             #      │
 description: "定时任务执行慢"                  #      │
 root_cause: "索引膨胀导致 IO 瓶颈"            #      │
 anomalies:                                    #      │
@@ -435,31 +436,31 @@ anomalies:                                    #      │
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              tickets                                     │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  TICKET-001                        │  TICKET-002                        │
-│  description: "报表查询变慢"        │  description: "定时任务执行慢"      │
-│  root_cause_id: RC-0001            │  root_cause_id: RC-0001            │
-└──────────────────┬─────────────────┴──────────────────┬─────────────────┘
-                   │                                    │
-                   ▼                                    ▼
+│  T-0001                              │  T-0002                          │
+│  description: "报表查询变慢"          │  description: "定时任务执行慢"    │
+│  root_cause_id: RC-0001              │  root_cause_id: RC-0001          │
+└──────────────────┬───────────────────┴──────────────────┬───────────────┘
+                   │                                      │
+                   ▼                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         ticket_phenomena                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  TICKET-001 → P-0001 (wait_io)     │  TICKET-002 → P-0001 (wait_io)     │
-│  TICKET-001 → P-0002 (索引增长)     │  TICKET-002 → P-0003 (表膨胀)      │
-└──────────────────┬─────────────────┴──────────────────┬─────────────────┘
-                   │                                    │
-                   └─────────────────┬──────────────────┘
+│  T-0001 → P-0001 (wait_io)           │  T-0002 → P-0001 (wait_io)       │
+│  T-0001 → P-0002 (索引增长)           │  T-0002 → P-0003 (表膨胀)        │
+└──────────────────┬───────────────────┴──────────────────┬───────────────┘
+                   │                                      │
+                   └─────────────────┬────────────────────┘
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                            phenomena                                     │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  P-0001: "wait_io 事件占比超过阈值"     ← 聚类自 TICKET-001 + TICKET-002 │
+│  P-0001: "wait_io 事件占比超过阈值"       ← 聚类自 T-0001 + T-0002       │
 │          cluster_size: 2                                                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  P-0002: "索引大小异常增长"             ← 仅来自 TICKET-001             │
+│  P-0002: "索引大小异常增长"               ← 仅来自 T-0001               │
 │          cluster_size: 1                                                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  P-0003: "表膨胀严重"                   ← 仅来自 TICKET-002             │
+│  P-0003: "表膨胀严重"                     ← 仅来自 T-0002               │
 │          cluster_size: 1                                                │
 └──────────────────────────────────────┬──────────────────────────────────┘
                                        │
@@ -832,7 +833,7 @@ def generate_diagnosis_summary(
 1. REINDEX INDEX CONCURRENTLY test_idx;
 2. 配置 autovacuum 参数
 
-**引用工单：** [T-001] [T-005]
+**引用工单：** [T-0001] [T-0005]
 ```
 
 ### 4.5 对话管理器 (PhenomenonDialogueManager)
@@ -935,7 +936,7 @@ class BaseDAO:
 ```json
 [
   {
-    "ticket_id": "TICKET-001",
+    "ticket_id": "T-0001",
     "metadata": {"version": "PostgreSQL-14.5"},
     "description": "在线报表查询突然变慢",
     "root_cause": "索引膨胀导致 IO 瓶颈",
@@ -954,7 +955,7 @@ class BaseDAO:
 **使用方法**:
 
 ```bash
-python -m dbdiag import data/tickets.json
+python -m dbdiag import data/example_tickets.json
 ```
 
 ### 5.2 索引重建 (rebuild-index)
@@ -1054,18 +1055,18 @@ def cluster_by_similarity(items, threshold=0.85):
 ┌─────────────┬─────────────────────────────┬─────────────────────┐
 │ ticket_id   │ root_cause                  │ solution            │
 ├─────────────┼─────────────────────────────┼─────────────────────┤
-│ TICKET-001  │ 索引膨胀导致 IO 瓶颈         │ REINDEX + 优化      │
-│ TICKET-002  │ 索引膨胀，查询走全表扫描     │ 重建索引            │
-│ TICKET-003  │ 连接池配置不当               │ 调整连接池大小      │
+│ T-0001      │ 索引膨胀导致 IO 瓶颈         │ REINDEX + 优化      │
+│ T-0002      │ 索引膨胀，查询走全表扫描     │ 重建索引            │
+│ T-0003      │ 连接池配置不当               │ 调整连接池大小      │
 └─────────────┴─────────────────────────────┴─────────────────────┘
 
 Step 5: 提取去重 -> raw_root_causes:
 ┌───────────┬─────────────────────────────┬────────────┐
 │ id        │ description                 │ ticket_ids │
 ├───────────┼─────────────────────────────┼────────────┤
-│ RRC-0001  │ 索引膨胀导致 IO 瓶颈         │ [001]      │
-│ RRC-0002  │ 索引膨胀，查询走全表扫描     │ [002]      │
-│ RRC-0003  │ 连接池配置不当               │ [003]      │
+│ RRC-0001  │ 索引膨胀导致 IO 瓶颈         │ [T-0001]   │
+│ RRC-0002  │ 索引膨胀，查询走全表扫描     │ [T-0002]   │
+│ RRC-0003  │ 连接池配置不当               │ [T-0003]   │
 └───────────┴─────────────────────────────┴────────────┘
 
 Step 6: 向量聚类 (RRC-0001 和 RRC-0002 相似度 > 0.85):
@@ -1095,88 +1096,128 @@ python -m dbdiag rebuild-index
 
 ### A. 对话示例
 
-以下是一个典型的诊断对话流程（3-4 轮定位根因）：
+以下是一个典型的诊断对话流程（3 轮定位根因）：
 
 ```
-[第 1 轮]
-用户: 查询变慢，原来几秒现在要半分钟
+██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗
+██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝
+██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗
+██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║
+██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝
+╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝
 
-系统: 建议确认以下 3 个现象：
+可用命令: /help /status /reset /exit
 
-  1. [P-0001] wait_io 事件占比异常高
-     观察方法:
-     SELECT wait_event_type, wait_event, count(*)
-     FROM pg_stat_activity WHERE state = 'active'
-     GROUP BY 1, 2 ORDER BY 3 DESC;
+请描述您遇到的数据库问题开始诊断。
 
-  2. [P-0002] 索引大小异常增长
-     观察方法:
-     SELECT indexname, pg_size_pretty(pg_relation_size(indexrelid))
-     FROM pg_indexes ORDER BY pg_relation_size(indexrelid) DESC LIMIT 10;
+> 查询变慢，原来几秒现在要半分钟
 
-  3. [P-0003] 索引碎片率异常高
-     观察方法:
-     SELECT schemaname, relname, n_dead_tup, n_live_tup
-     FROM pg_stat_user_tables ORDER BY n_dead_tup DESC;
+• 第 1 轮
+  → 正在分析问题...
+  → 检索相关现象...
+  → 评估假设 (3/3) 完成
 
-请检查并反馈结果（如：1确认 2确认 3否定）
+  轮次 1  │  推荐 3  │  确认 0  │  否认 0
 
-假设置信度:
-  1. [███░░░░░░░] 32% 索引膨胀导致 IO 瓶颈
-  2. [██░░░░░░░░] 28% 频繁更新导致索引碎片化
-  3. [██░░░░░░░░] 25% 统计信息过期
+  1. ███░░░░░░░ 32% 索引膨胀导致 IO 瓶颈
+  2. ██░░░░░░░░ 28% 频繁更新导致索引碎片化
+  3. ██░░░░░░░░ 25% 统计信息过期
 
----
+  建议确认以下 3 个现象：
 
-[第 2 轮]
-用户: 1确认 2确认 3否定
+  [1] P-0001
+      wait_io 事件占比异常高
+      观察方法:
+      SELECT wait_event_type, wait_event, count(*)
+      FROM pg_stat_activity WHERE state = 'active'
+      GROUP BY 1, 2 ORDER BY 3 DESC;
 
-系统: 建议确认以下 2 个现象：
+  [2] P-0002
+      索引大小异常增长
+      观察方法:
+      SELECT indexname, pg_size_pretty(pg_relation_size(indexrelid))
+      FROM pg_indexes ORDER BY pg_relation_size(indexrelid) DESC LIMIT 10;
 
-  1. [P-0004] n_dead_tup 数量异常高
-     观察方法:
-     SELECT relname, n_dead_tup, last_autovacuum
-     FROM pg_stat_user_tables WHERE n_dead_tup > 10000;
+  [3] P-0003
+      索引碎片率异常高
+      观察方法:
+      SELECT schemaname, relname, n_dead_tup, n_live_tup
+      FROM pg_stat_user_tables ORDER BY n_dead_tup DESC;
 
-  2. [P-0005] 执行 REINDEX 后性能恢复
-     观察方法:
-     REINDEX INDEX CONCURRENTLY <index_name>;
-     -- 对比重建前后的查询时间
+  请输入检查结果（如：1确认 2否定 3确认）
 
-假设置信度:
-  1. [██████░░░░] 58% 索引膨胀导致 IO 瓶颈
-  2. [███░░░░░░░] 22% 频繁更新导致索引碎片化
+> 1确认 2确认 3否定
 
----
+• 第 2 轮
+  → 正在处理反馈...
+  → 评估假设 (3/3) 完成
 
-[第 3 轮]
-用户: 1确认 2确认
+  轮次 2  │  推荐 5  │  确认 2  │  否认 1
 
-系统:
-══════════════════════════════════════════════════
-  根因已定位：索引膨胀导致 IO 瓶颈
-  置信度: 82%
-══════════════════════════════════════════════════
+  1. ██████░░░░ 58% 索引膨胀导致 IO 瓶颈
+  2. ███░░░░░░░ 22% 频繁更新导致索引碎片化
+  3. ██░░░░░░░░ 15% 统计信息过期
 
-【诊断总结】
+  建议确认以下 2 个现象：
 
-**观察到的现象：**
-1. wait_io 事件占比异常高
-2. 索引大小出现异常增长
-3. n_dead_tup 数量高，autovacuum 未及时清理
-4. 执行 REINDEX 后查询性能明显恢复
+  [1] P-0004
+      n_dead_tup 数量异常高
+      观察方法:
+      SELECT relname, n_dead_tup, last_autovacuum
+      FROM pg_stat_user_tables WHERE n_dead_tup > 10000;
 
-**推理链路：**
-高 IO 等待通常由磁盘读写瓶颈引起。结合索引异常增长和死元组
-堆积的现象，可以判断：频繁的数据更新产生了大量死元组，而
-autovacuum 未能及时清理，导致索引膨胀。
+  [2] P-0005
+      执行 REINDEX 后性能恢复
+      观察方法:
+      REINDEX INDEX CONCURRENTLY <index_name>;
+      -- 对比重建前后的查询时间
 
-**恢复措施：**
-1. REINDEX INDEX CONCURRENTLY <index_name>;
-2. ALTER TABLE <table> SET (autovacuum_vacuum_scale_factor = 0.05);
-3. 建立索引大小监控告警
+  请输入检查结果（如：1确认 2否定 3确认）
 
-引用工单: [DB-001] [DB-018]
+> 1确认 2确认
+
+• 第 3 轮
+  → 正在处理反馈...
+  → 评估假设 (3/3) 完成
+
+  轮次 3  │  推荐 5  │  确认 4  │  否认 1
+
+  1. ████████░░ 85% 索引膨胀导致 IO 瓶颈
+  2. ██░░░░░░░░ 12% 频繁更新导致索引碎片化
+  3. █░░░░░░░░░ 3% 统计信息过期
+
+  ╭─ ✓ 根因已定位 ───────────────────────────────────────────────╮
+  │                                                              │
+  │  根因: 索引膨胀导致 IO 瓶颈                                   │
+  │  置信度: 85%                                                  │
+  │                                                              │
+  │  ## 诊断总结                                                  │
+  │                                                              │
+  │  ### 观察到的现象                                             │
+  │  1. wait_io 事件占比异常高                                    │
+  │  2. 索引大小出现异常增长                                      │
+  │  3. n_dead_tup 数量高，autovacuum 未及时清理                  │
+  │  4. 执行 REINDEX 后查询性能明显恢复                           │
+  │                                                              │
+  │  ### 推理链路                                                 │
+  │  高 IO 等待通常由磁盘读写瓶颈引起。结合索引异常增长和死元组   │
+  │  堆积的现象，可以判断：频繁的数据更新产生了大量死元组，而     │
+  │  autovacuum 未能及时清理，导致索引膨胀。                      │
+  │                                                              │
+  │  ### 恢复措施                                                 │
+  │  1. REINDEX INDEX CONCURRENTLY <index_name>;                 │
+  │  2. ALTER TABLE <table> SET (autovacuum_vacuum_scale_factor  │
+  │     = 0.05);                                                 │
+  │  3. 建立索引大小监控告警                                      │
+  │                                                              │
+  │  引用工单                                                     │
+  │                                                              │
+  │  [1] T-0001: 报表查询变慢，wait_io 高                         │
+  │  [2] T-0018: 定时任务执行慢，索引膨胀                         │
+  │                                                              │
+  ╰──────────────────────────────────────────────────────────────╯
+
+再见！
 ```
 
 ### B. 配置说明
@@ -1206,13 +1247,13 @@ embedding_model:
 python -m dbdiag init
 
 # 导入工单数据
-python -m dbdiag import data/tickets.json
+python -m dbdiag import data/example_tickets.json
 
 # 重建索引
 python -m dbdiag rebuild-index
 
 # 启动 CLI 诊断
-python -m dbdiag chat
+python -m dbdiag cli
 
 # 生成知识图谱可视化
 python -m dbdiag visualize --layout hierarchical

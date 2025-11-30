@@ -28,8 +28,6 @@ from dbdiag.utils.config import load_config
 def _left_aligned_heading_console(self, console, options):
     """左对齐的标题渲染"""
     self.text.justify = "left"
-    if self.tag == "h2":
-        yield Text("")  # h2 前加空行
     yield self.text
 
 
@@ -198,7 +196,8 @@ class RichCLI:
 
             self._print_indented(Text(""))  # 空行
 
-        self._print_indented(Text("请输入检查结果（如：1确认 2否定 3确认）", style="bold"))
+        self._print_indented(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
+        self._print_indented(Text(""))
 
     def _render_root_cause_confirmation(self, response: dict):
         """渲染根因确认"""
@@ -207,35 +206,43 @@ class RichCLI:
         diagnosis_summary = response.get("diagnosis_summary", "")
         citations = response.get("citations", [])
 
-        # 标题
-        self._print_indented(Text(""))
-        self._print_indented(Text("✓ 根因已定位", style="bold green"))
-        self._print_indented(Text(""))
+        # 构建 Panel 内容
+        content_parts = []
 
         # 根因和置信度
         info = Text()
         info.append("根因: ", style="bold")
         info.append(f"{root_cause}\n", style="green bold")
-        info.append("置信度: ", style="bold")
-        info.append(f"{confidence:.0%}", style="cyan bold")
-        self._print_indented(info)
+        content_parts.append(info)
 
         # 诊断报告（Markdown 渲染）
         if diagnosis_summary:
             md = Markdown(diagnosis_summary, justify="left")
-            self._print_indented(md)
-            self._print_indented(Text(""))
+            content_parts.append(md)
+            content_parts.append(Text(""))
 
         # 引用工单
         if citations:
-            self._print_indented(Text("引用工单", style="bold"))
+            content_parts.append(Text("引用工单", style="bold"))
             for i, citation in enumerate(citations, 1):
-                self._print_indented(Text(""))
+                content_parts.append(Text(""))
                 cite_text = Text()
                 cite_text.append(f"[{i}] ", style="dim")
                 cite_text.append(f"{citation['ticket_id']}", style="bold cyan")
                 cite_text.append(f": {citation['description']}")
-                self._print_indented(cite_text)
+                content_parts.append(cite_text)
+
+        # 使用 Panel 包装，最大宽度 100
+        panel = Panel(
+            Group(*content_parts),
+            title="✓ 根因已定位",
+            title_align="left",
+            border_style="green",
+            width=min(100, self.console.width),
+            padding=(1, 2),
+        )
+        self._print_indented(Text(""))
+        self._print_indented(panel)
 
     def _update_stats_from_session(self):
         """从 session 更新统计信息"""
@@ -356,14 +363,15 @@ class RichCLI:
         self.console.print(Text(self.LOGO.strip(), style="bold blue"))
         self.console.print(Text("可用命令: /help /status /reset /exit", style="dim"))
         self.console.print()
-        self.console.print(Text("请描述您遇到的数据库问题开始诊断。"))
+        self.console.print(Text("请描述您遇到的数据库问题开始诊断。", style="bold yellow"))
+        self.console.print()
 
         try:
             while True:
                 try:
-                    user_input = self.console.input("[bold green]> [/bold green]").strip()
+                    user_input = self.console.input("[bold]> [/bold]").strip()
                 except EOFError:
-                    self.console.print(Text("\n再见！", style="blue"))
+                    self.console.print(Text("\n再见！\n", style="blue"))
                     break
 
                 if not user_input:
@@ -375,10 +383,11 @@ class RichCLI:
                     continue
 
                 if self._handle_diagnosis(user_input):
+                    self.console.print(Text("\n再见！\n", style="blue"))
                     break
 
         except KeyboardInterrupt:
-            self.console.print(Text("\n再见！", style="blue"))
+            self.console.print(Text("\n再见！\n", style="blue"))
 
 
 def main():
