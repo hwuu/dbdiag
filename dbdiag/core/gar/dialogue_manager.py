@@ -13,6 +13,7 @@ from dbdiag.models import (
 from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
 from dbdiag.core.gar.recommender import PhenomenonRecommendationEngine
 from dbdiag.core.gar.response_generator import ResponseGenerator
+from dbdiag.core.gar.retriever import PhenomenonRetriever
 from dbdiag.dao import PhenomenonDAO
 from dbdiag.services.session_service import SessionService
 from dbdiag.services.llm_service import LLMService
@@ -23,6 +24,10 @@ class GARDialogueManager:
     """图谱增强推理对话管理器 (Graph-Augmented-Reasoning)
 
     使用 phenomena 和 ticket_phenomena 构建的知识图谱进行诊断对话。
+
+    hybrid_mode: 混合增强模式
+        - 启用 ticket description 语义检索，从相似工单提取候选现象
+        - 增强初始推荐的覆盖率
     """
 
     def __init__(
@@ -32,6 +37,7 @@ class GARDialogueManager:
         embedding_service: Optional["EmbeddingService"] = None,
         progress_callback: Optional[callable] = None,
         recommender_config: Optional[RecommenderConfig] = None,
+        hybrid_mode: bool = False,
     ):
         """
         初始化对话管理器
@@ -42,11 +48,13 @@ class GARDialogueManager:
             embedding_service: Embedding 服务实例（单例，可选）
             progress_callback: 进度回调函数，签名为 callback(message: str)
             recommender_config: 推荐引擎配置
+            hybrid_mode: 是否启用混合增强模式
         """
         self.db_path = db_path
         self.llm_service = llm_service
         self.embedding_service = embedding_service
         self.progress_callback = progress_callback
+        self.hybrid_mode = hybrid_mode
 
         # 初始化服务
         self.session_service = SessionService(db_path)
@@ -59,6 +67,10 @@ class GARDialogueManager:
         )
         self.response_generator = ResponseGenerator(db_path, llm_service)
         self._phenomenon_dao = PhenomenonDAO(db_path)
+
+        # 混合模式使用的检索器
+        if hybrid_mode:
+            self._retriever = PhenomenonRetriever(db_path, embedding_service)
 
     def _report_progress(self, message: str) -> None:
         """报告进度"""
@@ -82,6 +94,20 @@ class GARDialogueManager:
         session.dialogue_history.append(
             DialogueMessage(role="user", content=user_problem)
         )
+
+        # 混合模式：先搜索相似工单，提取候选现象存入 session
+        if self.hybrid_mode:
+            self._report_progress("检索相似工单...")
+            ticket_matches = self._retriever.search_by_ticket_description(
+                user_problem, top_k=5
+            )
+            if ticket_matches:
+                self._report_progress(f"找到 {len(ticket_matches)} 个相似工单")
+                # 获取关联现象
+                ticket_ids = [m.ticket_id for m in ticket_matches]
+                candidate_phenomena = self._retriever.get_phenomena_by_ticket_ids(ticket_ids)
+                session.hybrid_candidate_phenomenon_ids = [p.phenomenon_id for p in candidate_phenomena]
+                self._report_progress(f"提取 {len(session.hybrid_candidate_phenomenon_ids)} 个候选现象")
 
         # 生成初始假设
         self._report_progress("检索相关现象...")
@@ -149,7 +175,27 @@ class GARDialogueManager:
 
         # 检查用户是否确认了之前推荐的现象
         self._report_progress("识别用户反馈...")
-        self._mark_confirmed_phenomena_from_feedback(user_message, session)
+        new_observations = self._mark_confirmed_phenomena_from_feedback(user_message, session)
+
+        # 中间轮语义检索：若有新观察，检索相似工单补充候选现象
+        if new_observations and self.hybrid_mode:
+            self._report_progress("检索相关案例...")
+            query = " ".join(new_observations)
+            ticket_matches = self._retriever.search_by_ticket_description(query, top_k=3)
+            if ticket_matches:
+                self._report_progress(f"找到 {len(ticket_matches)} 个相关案例")
+                ticket_ids = [m.ticket_id for m in ticket_matches]
+                candidate_phenomena = self._retriever.get_phenomena_by_ticket_ids(ticket_ids)
+                # 合并到候选池（去重）
+                existing_ids = set(session.hybrid_candidate_phenomenon_ids)
+                for p in candidate_phenomena:
+                    if p.phenomenon_id not in existing_ids:
+                        session.hybrid_candidate_phenomenon_ids.append(p.phenomenon_id)
+                        existing_ids.add(p.phenomenon_id)
+                self._report_progress(f"补充 {len(candidate_phenomena)} 个候选现象")
+
+            # 记录新观察到 session
+            session.new_observations.extend(new_observations)
 
         # 更新假设
         self._report_progress("更新假设置信度...")
@@ -227,7 +273,7 @@ class GARDialogueManager:
 
     def _mark_confirmed_phenomena_from_feedback(
         self, user_message: str, session: SessionState
-    ) -> None:
+    ) -> List[str]:
         """
         从用户反馈中识别已确认/否定的现象（支持批量）
 
@@ -235,11 +281,14 @@ class GARDialogueManager:
         - "1确认 2否定 3确认" - 批量确认/否定
         - "确认" / "是" / "看到了" - 确认最近推荐的所有现象
         - "全否定" / "都不是" - 否定最近推荐的所有现象
-        - "IO 正常，索引异常" - 自然语言描述
+        - "IO 正常，索引异常" - 自然语言描述（LLM 提取）
 
         Args:
             user_message: 用户消息
             session: 会话状态
+
+        Returns:
+            用户描述的新观察列表（不在待确认列表中的）
         """
         # 获取最近推荐的未处理现象（最多取最近的3个）
         confirmed_ids = {p.phenomenon_id for p in session.confirmed_phenomena}
@@ -250,7 +299,7 @@ class GARDialogueManager:
         ][-3:]  # 最近推荐的3个
 
         if not pending_phenomenon_ids:
-            return
+            return []
 
         # 简单否定关键词 -> 否定所有待确认的现象
         simple_deny_keywords = ["全否定", "都否定", "都不是", "全部否定", "都没有", "都没看到"]
@@ -260,7 +309,7 @@ class GARDialogueManager:
                     session.denied_phenomena.append(
                         DeniedPhenomenon(phenomenon_id=phenomenon_id)
                     )
-            return
+            return []
 
         # 尝试解析批量确认格式：如 "1确认 2否定 3确认"
         batch_pattern = r'(\d+)\s*(确认|否定|是|否|正常|异常|没有|不是)'
@@ -284,7 +333,7 @@ class GARDialogueManager:
                             session.denied_phenomena.append(
                                 DeniedPhenomenon(phenomenon_id=phenomenon_id)
                             )
-            return
+            return []
 
         # 简单确认关键词 -> 确认所有待确认的现象
         simple_confirm_keywords = ["确认", "是", "是的", "看到了", "观察到", "都确认", "全部确认"]
@@ -296,26 +345,57 @@ class GARDialogueManager:
                         result_summary=user_message,
                     )
                 )
-            return
+            return []
 
-        # 回退：使用 LLM 判断是否是确认反馈
-        system_prompt = """你是一个对话分析助手。判断用户的消息是否包含对诊断现象的确认反馈。
+        # 非简单格式：使用 LLM 结构化提取
+        return self._extract_feedback_with_llm(user_message, pending_phenomenon_ids, session)
 
-确认反馈的特征：
-1. 报告了观察结果（如"CPU 使用率 95%"、"IO 正常"）
-2. 回答了诊断问题（如"是的"、"确认"、"看到了"）
-3. 提供了检查结果（如"查询时间 30 秒"）
+    def _extract_feedback_with_llm(
+        self, user_message: str, pending_phenomenon_ids: List[str], session: SessionState
+    ) -> List[str]:
+        """
+        使用 LLM 从自然语言中提取结构化反馈
 
-非确认反馈：
-1. 单纯的问题（如"怎么检查？"）
-2. 闲聊或其他话题
+        Args:
+            user_message: 用户消息
+            pending_phenomenon_ids: 待确认的现象 ID 列表
+            session: 会话状态
 
-输出格式: 只输出 "yes" 或 "no"
-"""
+        Returns:
+            用户描述的新观察列表
+        """
+        self._report_progress("分析用户反馈...")
 
-        user_prompt = f"""用户消息: {user_message}
+        # 构建待确认现象列表
+        pending_descriptions = []
+        for i, pid in enumerate(pending_phenomenon_ids, 1):
+            phenomenon = self._get_phenomenon_by_id(pid)
+            if phenomenon:
+                pending_descriptions.append(f"{i}. [{pid}] {phenomenon.description}")
 
-这是否包含诊断现象的确认反馈？"""
+        system_prompt = """你是一个对话分析助手。分析用户消息，判断用户对每个待确认现象的反馈。
+
+输出 JSON 格式：
+{
+  "feedback": {
+    "<phenomenon_id>": "confirmed" | "denied" | "unknown"
+  },
+  "new_observations": ["用户提到的新观察1", "用户提到的新观察2"]
+}
+
+判断规则：
+- confirmed: 用户明确确认看到了该现象，或描述符合该现象
+- denied: 用户明确否认，或描述与该现象相反（如"正常"对应"异常"）
+- unknown: 用户未提及该现象
+
+new_observations: 用户描述的、不在待确认列表中的新观察或现象。只提取具体的技术观察，忽略闲聊。
+
+只输出 JSON，不要其他内容。"""
+
+        user_prompt = f"""待确认现象：
+{chr(10).join(pending_descriptions)}
+
+用户消息: {user_message}"""
 
         try:
             response = self.llm_service.generate_simple(
@@ -323,33 +403,61 @@ class GARDialogueManager:
                 system_prompt=system_prompt,
             )
 
-            is_feedback = response.strip().lower() in ["yes", "是"]
+            # 解析 JSON
+            import json
+            # 清理可能的 markdown 代码块
+            response = response.strip()
+            if response.startswith("```"):
+                response = re.sub(r'^```\w*\n?', '', response)
+                response = re.sub(r'\n?```$', '', response)
 
-            if is_feedback:
-                # 确认所有待确认的现象
-                for phenomenon_id in pending_phenomenon_ids:
+            result = json.loads(response)
+
+            # 处理反馈
+            feedback = result.get("feedback", {})
+            for pid in pending_phenomenon_ids:
+                status = feedback.get(pid, "unknown")
+                if status == "confirmed":
                     session.confirmed_phenomena.append(
                         ConfirmedPhenomenon(
-                            phenomenon_id=phenomenon_id,
+                            phenomenon_id=pid,
                             result_summary=user_message,
                         )
                     )
-
-        except Exception:
-            feedback_keywords = [
-                "正常", "异常", "没问题", "有问题",
-                "%", "占比", "发现", "观察到", "显示", "看到",
-                "ok", "高", "低", "多", "少"
-            ]
-
-            if any(keyword in user_message.lower() for keyword in feedback_keywords):
-                for phenomenon_id in pending_phenomenon_ids:
-                    session.confirmed_phenomena.append(
-                        ConfirmedPhenomenon(
-                            phenomenon_id=phenomenon_id,
-                            result_summary=user_message,
+                elif status == "denied":
+                    if pid not in session.denied_phenomenon_ids:
+                        session.denied_phenomena.append(
+                            DeniedPhenomenon(phenomenon_id=pid)
                         )
+
+            # 返回新观察
+            return result.get("new_observations", [])
+
+        except Exception as e:
+            # LLM 失败时回退到关键词匹配
+            self._report_progress(f"LLM 分析失败，使用关键词匹配: {e}")
+            return self._fallback_keyword_matching(user_message, pending_phenomenon_ids, session)
+
+    def _fallback_keyword_matching(
+        self, user_message: str, pending_phenomenon_ids: List[str], session: SessionState
+    ) -> List[str]:
+        """关键词匹配回退逻辑"""
+        feedback_keywords = [
+            "正常", "异常", "没问题", "有问题",
+            "%", "占比", "发现", "观察到", "显示", "看到",
+            "ok", "高", "低", "多", "少"
+        ]
+
+        if any(keyword in user_message.lower() for keyword in feedback_keywords):
+            for phenomenon_id in pending_phenomenon_ids:
+                session.confirmed_phenomena.append(
+                    ConfirmedPhenomenon(
+                        phenomenon_id=phenomenon_id,
+                        result_summary=user_message,
                     )
+                )
+
+        return []
 
     def _get_phenomenon_by_id(self, phenomenon_id: str) -> Optional[Phenomenon]:
         """根据 ID 获取现象"""

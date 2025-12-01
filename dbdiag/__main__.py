@@ -3,6 +3,7 @@
 使用方式：
     python -m dbdiag cli            # 启动交互式 CLI 诊断（图谱方法）
     python -m dbdiag cli --rar      # 启动交互式 CLI 诊断（检索方法，实验性）
+    python -m dbdiag cli --hyb      # 启动交互式 CLI 诊断（混合方法，实验性）
     python -m dbdiag api            # 启动 FastAPI 服务
     python -m dbdiag init           # 初始化数据库
     python -m dbdiag import         # 导入工单数据
@@ -28,10 +29,15 @@ def main():
     is_flag=True,
     help="使用检索增强推理方法（实验性）",
 )
-def interactive_cli(rar: bool):
+@click.option(
+    "--hyb",
+    is_flag=True,
+    help="使用混合增强推理方法（实验性）",
+)
+def interactive_cli(rar: bool, hyb: bool):
     """启动交互式命令行诊断（推荐）"""
     from dbdiag.cli.main import main as cli_main
-    cli_main(use_rar=rar)
+    cli_main(use_rar=rar, use_hyb=hyb)
 
 
 @main.command("api")

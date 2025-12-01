@@ -70,6 +70,12 @@ class SessionState(BaseModel):
     denied_phenomena: List[DeniedPhenomenon] = []
     recommended_phenomena: List[RecommendedPhenomenon] = []
 
+    # 混合模式：来自相似工单的候选现象 ID
+    hybrid_candidate_phenomenon_ids: List[str] = []
+
+    # 用户描述的新观察（不在待确认列表中的）
+    new_observations: List[str] = []
+
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump(mode="json")
 

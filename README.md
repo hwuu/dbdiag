@@ -17,11 +17,15 @@
 dbdiag/
 ├── dbdiag/               # 核心业务逻辑（领域层）
 │   ├── core/               # 核心逻辑
-│   │   ├── retriever.py          # 现象检索 (向量+关键词)
-│   │   ├── hypothesis_tracker.py # 多假设追踪
-│   │   ├── recommender.py        # 推荐引擎
-│   │   ├── response_generator.py # 响应生成
-│   │   └── dialogue_manager.py   # 对话管理
+│   │   ├── gar/                  # GAR（图谱增强推理）
+│   │   │   ├── retriever.py          # 现象检索 (向量+关键词)
+│   │   │   ├── hypothesis_tracker.py # 多假设追踪
+│   │   │   ├── recommender.py        # 推荐引擎
+│   │   │   ├── response_generator.py # 响应生成
+│   │   │   └── dialogue_manager.py   # 对话管理
+│   │   └── rar/                  # RAR（检索增强推理，实验性）
+│   │       ├── retriever.py          # 工单检索
+│   │       └── dialogue_manager.py   # RAG + LLM 端到端推理
 │   ├── api/                # FastAPI 接口
 │   │   ├── main.py             # FastAPI 应用入口
 │   │   ├── chat.py             # 聊天 API
@@ -31,7 +35,11 @@ dbdiag/
 │   │   ├── embedding_service.py  # 向量化服务
 │   │   └── llm_service.py        # LLM 调用
 │   ├── models/             # 数据模型
+│   │   ├── common.py           # 共享领域模型
+│   │   ├── gar.py              # GAR 会话模型
+│   │   └── rar.py              # RAR 会话模型
 │   ├── cli/                # 命令行界面
+│   │   └── main.py             # CLI/GARCLI/HybCLI/RARCLI
 │   ├── scripts/            # 初始化脚本
 │   │   ├── init_db.py              # 创建数据库
 │   │   ├── import_raw_tickets.py   # 导入工单数据
@@ -104,8 +112,23 @@ python -m dbdiag rebuild-index
 #### 方式 1: CLI 命令行 (推荐)
 
 ```bash
+# GAR 模式（图谱增强推理，默认）
 python -m dbdiag cli
+
+# RAR 模式（检索增强推理，实验性）
+python -m dbdiag cli --rar
+
+# Hyb 模式（混合增强推理，实验性）
+python -m dbdiag cli --hyb
 ```
+
+**三种模式对比**:
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| GAR | 知识图谱 + 规则引擎 | 标准诊断流程，可解释性强 |
+| RAR | RAG + LLM 端到端 | 灵活，无需预建索引 |
+| Hyb | GAR + 语义检索 + LLM 反馈理解 | 自然语言交互，动态发现线索 |
 
 #### 方式 2: FastAPI 服务
 
@@ -205,8 +228,14 @@ python -m dbdiag import --data <json文件路径>
 # 重建向量索引
 python -m dbdiag rebuild-index
 
-# 启动命令行交互诊断
+# 启动命令行交互诊断（GAR 模式，默认）
 python -m dbdiag cli
+
+# 启动命令行交互诊断（RAR 模式，实验性）
+python -m dbdiag cli --rar
+
+# 启动命令行交互诊断（Hyb 模式，实验性）
+python -m dbdiag cli --hyb
 
 # 启动 FastAPI 服务
 python -m dbdiag api --host 0.0.0.0 --port 8000

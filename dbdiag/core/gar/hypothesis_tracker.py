@@ -133,7 +133,8 @@ class PhenomenonHypothesisTracker:
         return session
 
     def _retrieve_root_cause_candidates(
-        self, session: SessionState
+        self,
+        session: SessionState,
     ) -> Dict[str, Dict]:
         """
         检索根因候选
@@ -144,6 +145,9 @@ class PhenomenonHypothesisTracker:
         Returns:
             {根因: {"phenomena": [...], "ticket_ids": [...]}}
         """
+        # 从 session 读取混合模式候选现象
+        boost_phenomenon_ids = set(session.hybrid_candidate_phenomenon_ids)
+
         # 构建查询上下文（只用 user_problem，保持稳定）
         query_context = session.user_problem
 
@@ -154,7 +158,7 @@ class PhenomenonHypothesisTracker:
             excluded_phenomenon_ids=set(),  # 不排除任何现象
         )
 
-        root_cause_map = defaultdict(lambda: {"phenomena": [], "ticket_ids": set()})
+        root_cause_map = defaultdict(lambda: {"phenomena": [], "ticket_ids": set(), "boosted": False})
 
         for phenomenon, score in retrieved_phenomena:
             # 查找关联的 tickets（使用 DAO）
@@ -166,6 +170,29 @@ class PhenomenonHypothesisTracker:
 
                 root_cause_map[root_cause_id]["phenomena"].append(phenomenon)
                 root_cause_map[root_cause_id]["ticket_ids"].add(ticket_id)
+
+                # 标记是否来自混合模式增强
+                if phenomenon.phenomenon_id in boost_phenomenon_ids:
+                    root_cause_map[root_cause_id]["boosted"] = True
+
+        # 混合模式：补充候选现象（可能检索没召回）
+        if boost_phenomenon_ids:
+            from dbdiag.dao import PhenomenonDAO
+            phenomenon_dao = PhenomenonDAO(self.db_path)
+            for pid in boost_phenomenon_ids:
+                row_dict = phenomenon_dao.get_by_id(pid)
+                if row_dict:
+                    phenomenon = phenomenon_dao.dict_to_model(row_dict)
+                    ticket_rows = self._ticket_dao.get_by_phenomenon_id(pid)
+                    for row in ticket_rows:
+                        root_cause_id = row["root_cause_id"]
+                        ticket_id = row["ticket_id"]
+                        # 避免重复添加
+                        existing_pids = {p.phenomenon_id for p in root_cause_map[root_cause_id]["phenomena"]}
+                        if pid not in existing_pids:
+                            root_cause_map[root_cause_id]["phenomena"].append(phenomenon)
+                        root_cause_map[root_cause_id]["ticket_ids"].add(ticket_id)
+                        root_cause_map[root_cause_id]["boosted"] = True
 
         # 转换 set 为 list
         for root_cause in root_cause_map:

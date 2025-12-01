@@ -3,12 +3,24 @@
 实现基于向量和关键词的混合检索
 """
 import json
+import sqlite3
+from dataclasses import dataclass
 from typing import List, Optional, Set
 
 from dbdiag.models import Phenomenon
 from dbdiag.dao import PhenomenonDAO
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.vector_utils import deserialize_f32, cosine_similarity
+
+
+@dataclass
+class TicketMatch:
+    """匹配到的工单信息"""
+
+    ticket_id: str
+    description: str
+    root_cause: str
+    similarity: float = 0.0
 
 
 class PhenomenonRetriever:
@@ -121,3 +133,115 @@ class PhenomenonRetriever:
         # 4. 排序并返回 Top-K
         scored_phenomena.sort(key=lambda x: x[1], reverse=True)
         return scored_phenomena[:top_k]
+
+    def search_by_ticket_description(
+        self,
+        query: str,
+        top_k: int = 5,
+    ) -> List[TicketMatch]:
+        """根据用户问题描述搜索相似的历史工单
+
+        用于混合增强模式：从语义相似的历史工单中提取关联现象。
+
+        Args:
+            query: 用户问题描述
+            top_k: 返回的最大工单数
+
+        Returns:
+            匹配的工单列表（按相似度降序）
+        """
+        if not self.embedding_service:
+            return []
+
+        # 生成查询向量
+        query_embedding = self.embedding_service.encode(query)
+
+        # 从 rar_raw_tickets 表检索（复用其向量）
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                """
+                SELECT ticket_id, description, root_cause, embedding
+                FROM rar_raw_tickets
+                WHERE embedding IS NOT NULL
+                """
+            )
+            rows = cursor.fetchall()
+
+            if not rows:
+                return []
+
+            # 计算相似度
+            matches = []
+            for row in rows:
+                ticket_id, description, root_cause, embedding_blob = row
+                ticket_embedding = deserialize_f32(embedding_blob)
+                similarity = cosine_similarity(query_embedding, ticket_embedding)
+
+                matches.append(
+                    TicketMatch(
+                        ticket_id=ticket_id,
+                        description=description,
+                        root_cause=root_cause,
+                        similarity=similarity,
+                    )
+                )
+
+            # 按相似度排序
+            matches.sort(key=lambda m: m.similarity, reverse=True)
+            return matches[:top_k]
+
+        finally:
+            conn.close()
+
+    def get_phenomena_by_ticket_ids(
+        self,
+        ticket_ids: List[str],
+    ) -> List[Phenomenon]:
+        """根据工单 ID 获取关联的现象
+
+        Args:
+            ticket_ids: 工单 ID 列表
+
+        Returns:
+            去重后的现象列表
+        """
+        if not ticket_ids:
+            return []
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            placeholders = ",".join("?" * len(ticket_ids))
+            cursor.execute(
+                f"""
+                SELECT DISTINCT p.phenomenon_id, p.description, p.observation_method,
+                       p.source_anomaly_ids, p.cluster_size
+                FROM phenomena p
+                JOIN ticket_phenomena tp ON p.phenomenon_id = tp.phenomenon_id
+                WHERE tp.ticket_id IN ({placeholders})
+                """,
+                ticket_ids,
+            )
+            rows = cursor.fetchall()
+
+            phenomena = []
+            for row in rows:
+                # source_anomaly_ids 是 JSON 字符串
+                source_ids = json.loads(row[3]) if row[3] else []
+                phenomenon = Phenomenon(
+                    phenomenon_id=row[0],
+                    description=row[1],
+                    observation_method=row[2] or "",
+                    source_anomaly_ids=source_ids,
+                    cluster_size=row[4] or 1,
+                )
+                phenomena.append(phenomenon)
+
+            return phenomena
+
+        finally:
+            conn.close()

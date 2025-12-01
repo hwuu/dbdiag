@@ -87,7 +87,7 @@
 
 | 组件 | 技术选型 | 说明 |
 |------|----------|------|
-| **CLI 框架** | Click | 命令行界面 |
+| **CLI 框架** | Click + Rich | 命令行界面 + 美化输出 |
 | **Web 框架** | FastAPI | 轻量、异步、自动文档 |
 | **数据库** | SQLite | 零配置、单文件部署 |
 | **LLM** | OpenAI 兼容 API | 支持多种模型 |
@@ -106,13 +106,17 @@ dbdiag/
 │   │   ├── chat.py
 │   │   └── session.py
 │   ├── cli/                      # 命令行界面
-│   │   └── main.py
+│   │   └── main.py               # CLI/GARCLI/HybCLI/RARCLI 类
 │   ├── core/                     # 核心逻辑
-│   │   ├── dialogue_manager.py
-│   │   ├── hypothesis_tracker.py
-│   │   ├── retriever.py
-│   │   ├── recommender.py
-│   │   └── response_generator.py
+│   │   ├── gar/                  # GAR（图谱增强推理）
+│   │   │   ├── dialogue_manager.py
+│   │   │   ├── hypothesis_tracker.py
+│   │   │   ├── retriever.py
+│   │   │   ├── recommender.py
+│   │   │   └── response_generator.py
+│   │   └── rar/                  # RAR（检索增强推理）
+│   │       ├── dialogue_manager.py
+│   │       └── retriever.py
 │   ├── dao/                      # 数据访问层
 │   │   ├── base.py
 │   │   ├── phenomenon_dao.py
@@ -123,9 +127,9 @@ dbdiag/
 │   │   ├── raw_ticket_dao.py
 │   │   └── index_builder_dao.py
 │   ├── models/                   # 数据模型
-│   │   ├── session.py
-│   │   ├── ticket.py
-│   │   └── phenomenon.py
+│   │   ├── common.py             # 共享领域模型
+│   │   ├── gar.py                # GAR 会话模型
+│   │   └── rar.py                # RAR 会话模型
 │   ├── services/                 # 外部服务
 │   │   ├── llm_service.py
 │   │   ├── embedding_service.py
@@ -848,11 +852,40 @@ def generate_diagnosis_summary(
 **引用工单：** [T-0001] [T-0005]
 ```
 
-### 4.5 对话管理器 (GARDialogueManager)
+### 4.5 对话管理
+
+系统支持三种诊断方法，各有特点：
+
+| 方法 | 文件 | 特点 |
+|------|------|------|
+| GAR（图谱增强推理） | `core/gar/dialogue_manager.py` | 确定性算法，可解释性强 |
+| RAR（检索增强推理） | `core/rar/dialogue_manager.py` | LLM 端到端，灵活性高 |
+| Hyb（混合增强推理） | `core/gar/dialogue_manager.py` (hybrid_mode=True) | GAR 架构 + RAR 能力 |
+
+#### 4.5.1 图谱增强推理 (GAR)
 
 **文件**: `dbdiag/core/gar/dialogue_manager.py`
 
-**职责**: 整合所有组件，管理对话流程。
+**总览：GAR 流程**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              GAR 流程                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌───────────┐    ┌───────────┐    ┌───────────┐    ┌───────────────┐   │
+│  │  用户输入  │ →  │ Retriever │ →  │ Hypothesis│ →  │  Recommender  │   │
+│  └───────────┘    │ 检索现象   │    │  Tracker  │    │  推荐/诊断    │   │
+│                   └───────────┘    └───────────┘    └───────────────┘   │
+│                         ↓                ↓                              │
+│                   现象向量检索      确定性置信度计算                       │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  反馈处理：关键词匹配（"1确认 2否定"、"确认"、"否定"）              │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 **主要流程**:
 
@@ -860,15 +893,16 @@ def generate_diagnosis_summary(
 start_conversation(user_problem)
     │
     ├─> 创建会话
-    ├─> 初始化假设
-    └─> 返回首轮推荐
+    ├─> 检索相关现象 (Retriever)
+    ├─> 初始化假设 (HypothesisTracker)
+    └─> 返回首轮推荐 (Recommender)
 
 continue_conversation(session_id, user_message)
     │
-    ├─> 解析用户反馈（确认/否定现象）
-    ├─> 更新会话状态
-    ├─> 重新计算假设置信度
-    ├─> 生成下一步推荐或诊断结论
+    ├─> 解析用户反馈（关键词匹配）
+    ├─> 更新 confirmed_phenomena / denied_phenomena
+    ├─> 重新计算假设置信度 (HypothesisTracker)
+    ├─> 生成下一步推荐或诊断结论 (Recommender)
     └─> 返回响应
 ```
 
@@ -876,11 +910,15 @@ continue_conversation(session_id, user_message)
 
 ```python
 class GARDialogueManager:
-    def __init__(self, db_path, llm_service, embedding_service):
+    def __init__(
+        self, db_path, llm_service, embedding_service,
+        hybrid_mode: bool = False  # 混合增强模式
+    ):
         self.hypothesis_tracker = PhenomenonHypothesisTracker(...)
         self.recommender = PhenomenonRecommendationEngine(...)
         self.response_generator = ResponseGenerator(...)
         self.session_dao = SessionDAO(db_path)
+        self.hybrid_mode = hybrid_mode
 
     def start_conversation(self, user_problem: str) -> Dict:
         """开始新对话"""
@@ -889,7 +927,318 @@ class GARDialogueManager:
         """继续对话"""
 ```
 
-### 4.6 DAO 数据访问层
+**核心特点**：
+- 基于预处理的 `phenomena`、`root_causes`、`phenomenon_root_causes` 表
+- 确定性算法计算置信度（见 4.2 HypothesisTracker）
+- 多因素打分推荐现象（见 4.3 Recommender）
+- 用户反馈通过关键词匹配解析
+
+#### 4.5.2 检索增强推理 (RAR)
+
+**文件**: `dbdiag/core/rar/dialogue_manager.py`
+
+**总览：RAR 流程**
+
+```
+┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+                               RAR 流程
+├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤
+│                                                                          │
+   ┌ ─ ─ ─ ─ ─ ┐    ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐    ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+│  │  用户输入  │ →     RAG 检索        │ →     LLM 端到端推理         │    │
+   └ ─ ─ ─ ─ ─ ┘    │ rar_raw_tickets │    │  推荐现象 / 诊断结论  │
+│                   └ ─ ─ ─ ─ ─ ─ ─ ─ ┘    └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘    │
+                          ↓                          ↓
+│                  工单描述向量检索            LLM 自主判断置信度            │
+                                                     ↓
+│  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐    │
+      反馈处理：LLM 自由理解（无结构化约束）
+│  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘    │
+
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+```
+
+**主要流程**:
+
+```
+process_message(user_message)
+    │
+    ├─> [Step 1] RAG 检索相关工单
+    │       │   - 向量检索 rar_raw_tickets
+    │       │   - 返回 Top-10 相似工单
+    │
+    ├─> [Step 2] 构建 LLM Prompt
+    │       │   - 用户问题 + 当前状态 + 相关工单
+    │       │   - Top 3 工单：完整内容
+    │       │   - Top 4-10：精简摘要
+    │
+    ├─> [Step 3] LLM 推理
+    │       │   - 输出 JSON: action + confidence + reasoning
+    │       │   - action = "recommend" 或 "diagnose"
+    │
+    ├─> [Step 4] Guardrails 校验
+    │       │   - 过滤已问过的观察（避免重复推荐）
+    │       │   - 验证引用的工单确实存在
+    │
+    └─> [Step 5] 轮次检查
+            │   - 超过 max_turns (5轮) 强制诊断
+```
+
+**LLM 输出格式**:
+
+```json
+// 推荐模式
+{
+  "action": "recommend",
+  "confidence": 0.45,
+  "reasoning": "用户描述了查询变慢，但缺少 IO、锁等关键观察...",
+  "recommendations": [
+    {
+      "observation": "wait_io 事件占比",
+      "method": "SELECT wait_event_type, count(*) FROM pg_stat_activity...",
+      "why": "高 IO 等待通常与索引膨胀相关",
+      "related_root_causes": ["索引膨胀", "磁盘 IO 瓶颈"]
+    }
+  ]
+}
+
+// 诊断模式
+{
+  "action": "diagnose",
+  "confidence": 0.85,
+  "root_cause": "索引膨胀导致 IO 瓶颈",
+  "reasoning": "用户确认了 wait_io 高、索引增长异常...",
+  "observed_phenomena": ["wait_io 占比 65%", "索引从 2GB 增长到 12GB"],
+  "solution": "1. REINDEX INDEX CONCURRENTLY...",
+  "cited_tickets": ["T-0001", "T-0018"]
+}
+```
+
+**核心特点**：
+- 直接使用 `rar_raw_tickets` 原始数据（无需预处理）
+- LLM 端到端推理，自由组合信息
+- 高度灵活但行为不可预测
+- 需要 Guardrails 防止幻觉
+
+#### 4.5.3 混合增强推理 (Hyb)
+
+Hyb 结合了 GAR 的可靠性和 RAR 的灵活性。
+
+**文件**: `dbdiag/core/gar/dialogue_manager.py` (hybrid_mode=True)
+
+**总览：Hyb = GAR 架构 + RAR 能力**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     Hyb 流程 = GAR 架构 + RAR 能力                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ 【借鉴 RAR】初始轮语义检索                                              ║  │
+│  ║  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐   ║  │
+│  ║     用户问题 → 检索 rar_raw_tickets → 提取关联现象 → 补充候选池       ║  │
+│  ║  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│                                       ↓                                      │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ 【继承 GAR】核心推理流程                                                │  │
+│  │                                                                        │  │
+│  │  ┌───────────┐    ┌───────────┐    ┌───────────┐    ┌───────────┐    │  │
+│  │  │  用户输入  │ →  │ Retriever │ →  │ Hypothesis│ →  │Recommender│    │  │
+│  │  └───────────┘    │ 检索现象   │    │  Tracker  │    │ 推荐/诊断 │    │  │
+│  │                   └───────────┘    └───────────┘    └───────────┘    │  │
+│  │                         ↓                ↓                            │  │
+│  │                   现象向量检索      确定性置信度计算                     │  │
+│  │                                                                        │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                       ↓                                      │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ 【借鉴 RAR】反馈理解增强                                                ║  │
+│  ║                                                                        ║  │
+│  ║  简单格式 ─────→ 快速路径（关键词匹配，继承 GAR）                        ║  │
+│  ║  ("1确认 2否定")                                                       ║  │
+│  ║                   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐    ║  │
+│  ║  自然语言 ─────→    LLM 结构化提取（借鉴 RAR 的语义理解能力）        ║  │
+│  ║  ("IO正常,           ↓                                           │    ║  │
+│  ║   索引涨了")      { feedback: {...}, new_observations: [...] }        ║  │
+│  ║                                            ↓                     │    ║  │
+│  ║                   若有 new_observations → 触发语义检索 → 补充候选      ║  │
+│  ║                   └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘    ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│                                                                              │
+│  图例：┌───┐ 继承自 GAR     ╔═══╗ Hyb 增强层                                 │
+│       └───┘ (确定性算法)   ╚═══╝                                            │
+│       ┌ ─ ┐ 借鉴自 RAR                                                      │
+│       └ ─ ┘ (语义检索/LLM)                                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**初始轮：语义检索增强**
+
+```
+用户问题: "查询变慢，原来几秒现在要半分钟"
+    │
+    ▼
+[Step 1] 语义检索相似工单 (search_by_ticket_description)
+    │   - 使用 rar_raw_tickets 表的向量索引
+    │   - 返回 Top-5 相似工单
+    │
+    ▼
+[Step 2] 提取候选现象 (get_phenomena_by_ticket_ids)
+    │   - 从相似工单关联的 ticket_phenomena 提取现象
+    │   - 存入 session.hybrid_candidate_phenomenon_ids
+    │
+    ▼
+[后续流程] 与标准 GAR 相同
+```
+
+**中间轮：LLM 反馈理解 + 动态检索**
+
+当用户提供自然语言反馈（而非简单的 "1确认 2否定"）时：
+
+```
+用户反馈: "IO 正常，索引涨了 6 倍，另外发现很多慢查询"
+    │
+    ▼
+[Step 1] LLM 结构化提取
+    │   输出: {
+    │     "feedback": {"P-0001": "denied", "P-0002": "confirmed", ...},
+    │     "new_observations": ["发现很多慢查询"]
+    │   }
+    │
+    ▼
+[Step 2] 处理确认/否定
+    │   - 更新 session.confirmed_phenomena
+    │   - 更新 session.denied_phenomena
+    │
+    ▼
+[Step 3] 若有 new_observations
+    │   - 语义检索相似工单（基于新观察）
+    │   - 提取候选现象，合并到 session.hybrid_candidate_phenomenon_ids
+    │   - 记录到 session.new_observations
+    │
+    ▼
+[后续流程] 更新假设 + 生成推荐
+```
+
+**会话状态扩展**:
+
+```python
+class SessionState(BaseModel):
+    # ... 标准字段 ...
+
+    # 混合模式：来自相似工单的候选现象 ID
+    hybrid_candidate_phenomenon_ids: List[str] = []
+
+    # 用户描述的新观察（不在待确认列表中的）
+    new_observations: List[str] = []
+```
+
+**核心特点**：
+- **继承 GAR**：多模块协作架构、确定性置信度计算
+- **借鉴 RAR**：工单描述语义检索、LLM 语义理解能力
+- **快速路径**：简单格式跳过 LLM，降低延迟和成本
+- **动态发现**：中间轮可发现新线索，补充候选现象
+
+#### 4.5.4 三种方法对比
+
+| 维度 | GAR | RAR | Hyb |
+|------|-----|-----|-----|
+| **推理引擎** | 确定性算法 | LLM 端到端 | 确定性算法 |
+| **数据依赖** | 预处理多表 | 原始单表 | 预处理多表 + 原始工单 |
+| **反馈理解** | 关键词匹配 | LLM 自由理解 | 快速路径 + LLM 结构化 |
+| **置信度** | 公式计算 | LLM 自主判断 | 公式计算 |
+| **可解释性** | ✅ 高 | ⚠️ 中 | ✅ 高 |
+| **幻觉风险** | ✅ 无 | ⚠️ 有 | ✅ 无 |
+| **灵活性** | ⚠️ 低 | ✅ 高 | ✅ 中高 |
+| **动态发现** | ❌ 否 | ✅ 是 | ✅ 是 |
+
+### 4.6 CLI 架构
+
+**文件**: `dbdiag/cli/main.py`
+
+**职责**: 提供命令行交互界面，支持多种诊断模式。
+
+#### 4.6.1 类继承结构
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           CLI 类继承结构                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│                        ┌─────────────┐                                  │
+│                        │     CLI     │ (抽象基类)                        │
+│                        │  - console  │                                  │
+│                        │  - config   │                                  │
+│                        │  - run()    │                                  │
+│                        └──────┬──────┘                                  │
+│                               │                                         │
+│              ┌────────────────┼────────────────┐                        │
+│              │                │                │                        │
+│              ▼                │                ▼                        │
+│      ┌─────────────┐         │        ┌─────────────┐                  │
+│      │   GARCLI    │         │        │   RARCLI    │                  │
+│      │ (图谱增强)   │         │        │ (检索增强)   │                  │
+│      └──────┬──────┘         │        └─────────────┘                  │
+│             │                │                                          │
+│             ▼                │                                          │
+│      ┌─────────────┐         │                                          │
+│      │   HybCLI    │         │                                          │
+│      │ (混合增强)   │         │                                          │
+│      └─────────────┘         │                                          │
+│                              │                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**CLI 抽象基类**:
+
+```python
+class CLI(ABC):
+    """CLI 抽象基类"""
+
+    def __init__(self):
+        self.console = Console()  # Rich Console
+        self.config = load_config()
+        self.db_path = "data/tickets.db"
+        self.llm_service = LLMService(self.config)
+        self.embedding_service = EmbeddingService(self.config)
+
+    def run(self):
+        """运行 CLI 主循环"""
+
+    @abstractmethod
+    def _show_welcome(self) -> None: pass
+
+    @abstractmethod
+    def _handle_diagnosis(self, user_message: str) -> bool: pass
+
+    # ... 其他抽象方法
+```
+
+**各 CLI 类职责**:
+
+| CLI 类 | 职责 | 启动命令 |
+|--------|------|----------|
+| `GARCLI` | 图谱增强推理，使用知识图谱 | `python -m dbdiag cli` |
+| `HybCLI` | 混合增强推理，GAR + 语义检索 | `python -m dbdiag cli --hyb` |
+| `RARCLI` | 检索增强推理，RAG + LLM 端到端 | `python -m dbdiag cli --rar` |
+
+**HybCLI 实现**:
+
+```python
+class HybCLI(GARCLI):
+    """Hyb CLI（混合增强推理，实验性）"""
+
+    def __init__(self):
+        super().__init__()
+        # 重新创建 dialogue_manager，启用 hybrid_mode
+        self.dialogue_manager = GARDialogueManager(
+            self.db_path, self.llm_service, self.embedding_service,
+            hybrid_mode=True,  # 启用混合模式
+        )
+```
+
+### 4.7 DAO 数据访问层
 
 **文件**: `dbdiag/dao/`
 
@@ -1342,16 +1691,19 @@ python -m dbdiag rebuild-index
 再见！
 ```
 
-**GAR vs RAR 对比**：
+**GAR vs RAR vs Hyb 对比**：
 
-| 特性 | GAR（图谱增强推理） | RAR（检索增强推理） |
-|------|---------------------|---------------------|
-| 推理方式 | 知识图谱 + 规则引擎 | RAG + LLM 端到端 |
-| 现象管理 | 标准化现象库（phenomena 表） | 直接从工单检索 |
-| 置信度计算 | 多因素公式计算 | LLM 自主判断 |
-| 可解释性 | 高（每步可追溯） | 中（依赖 LLM 解释） |
-| 灵活性 | 需要预建索引 | 无需预处理 |
-| 启动命令 | `python -m dbdiag cli` | `python -m dbdiag cli --rar` |
+| 特性 | GAR（图谱增强推理） | RAR（检索增强推理） | Hyb（混合增强推理） |
+|------|---------------------|---------------------|---------------------|
+| 推理方式 | 知识图谱 + 规则引擎 | RAG + LLM 端到端 | 知识图谱 + 语义检索 + LLM 反馈理解 |
+| 现象管理 | 标准化现象库（phenomena 表） | 直接从工单检索 | 标准化现象库 + 工单语义检索 |
+| 反馈理解 | 关键词匹配 | LLM 自主判断 | LLM 结构化提取 |
+| 置信度计算 | 多因素公式计算 | LLM 自主判断 | 多因素公式计算 |
+| 可解释性 | 高（每步可追溯） | 中（依赖 LLM 解释） | 高（每步可追溯） |
+| 灵活性 | 需要预建索引 | 无需预处理 | 需要预建索引 |
+| 初始推荐覆盖率 | 中（依赖现象向量检索） | 高（直接从工单） | 高（语义检索增强） |
+| 中间轮动态发现 | 否 | 是 | 是（基于新观察检索） |
+| 启动命令 | `python -m dbdiag cli` | `python -m dbdiag cli --rar` | `python -m dbdiag cli --hyb` |
 
 ### B. 配置说明
 
@@ -1385,8 +1737,14 @@ python -m dbdiag import data/example_tickets.json
 # 重建索引
 python -m dbdiag rebuild-index
 
-# 启动 CLI 诊断
+# 启动 CLI 诊断（默认 GAR 模式）
 python -m dbdiag cli
+
+# 启动 CLI 诊断（RAR 模式，实验性）
+python -m dbdiag cli --rar
+
+# 启动 CLI 诊断（混合增强模式，实验性）
+python -m dbdiag cli --hyb
 
 # 生成知识图谱可视化
 python -m dbdiag visualize --layout hierarchical
