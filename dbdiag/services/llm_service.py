@@ -32,6 +32,7 @@ class LLMService:
         messages: List[Dict[str, str]],
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
+        debug: bool = False,
     ) -> str:
         """
         生成回复
@@ -40,6 +41,7 @@ class LLMService:
             messages: 对话消息列表 [{"role": "user", "content": "..."}, ...]
             system_prompt: 系统提示（可选，覆盖默认）
             temperature: 温度参数（可选，覆盖默认）
+            debug: 是否打印 curl 命令
 
         Returns:
             生成的回复文本
@@ -57,6 +59,21 @@ class LLMService:
         # 添加对话历史
         full_messages.extend(messages)
 
+        # DEBUG: 打印 curl 命令
+        if debug:
+            import json
+            request_body = {
+                "model": self.model,
+                "messages": full_messages,
+                "temperature": temperature if temperature is not None else self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            curl_cmd = f"""curl -X POST '{self.config.llm.api_base}/chat/completions' \\
+  -H 'Content-Type: application/json' \\
+  -H 'Authorization: Bearer {self.config.llm.api_key[:10]}...' \\
+  -d '{json.dumps(request_body, ensure_ascii=False)[:500]}...'"""
+            print(f"\n[DEBUG CURL]\n{curl_cmd}\n")
+
         # 调用 API
         response = self.client.chat.completions.create(
             model=self.model,
@@ -67,16 +84,17 @@ class LLMService:
 
         return response.choices[0].message.content
 
-    def generate_simple(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def generate_simple(self, prompt: str, system_prompt: Optional[str] = None, debug: bool = False) -> str:
         """
         简单生成（单轮对话）
 
         Args:
             prompt: 用户输入
             system_prompt: 系统提示（可选）
+            debug: 是否打印 curl 命令
 
         Returns:
             生成的回复文本
         """
         messages = [{"role": "user", "content": prompt}]
-        return self.generate(messages, system_prompt=system_prompt)
+        return self.generate(messages, system_prompt=system_prompt, debug=debug)
