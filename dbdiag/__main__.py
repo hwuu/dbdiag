@@ -6,8 +6,8 @@
     python -m dbdiag api            # 启动 FastAPI 服务
     python -m dbdiag init           # 初始化数据库
     python -m dbdiag import         # 导入工单数据
-    python -m dbdiag rebuild-index  # 重建向量索引（图谱方法用）
-    python -m dbdiag init-rar-index # 初始化 RAR 索引（检索方法用）
+    python -m dbdiag convert        # 转换上游数据格式
+    python -m dbdiag rebuild-index  # 重建向量索引（包含 GAR 和 RAR）
     python -m dbdiag visualize      # 生成知识图谱可视化
 """
 import sys
@@ -110,7 +110,7 @@ def import_data(data: str, db: str):
     help="配置文件路径（默认: config.yaml）",
 )
 def rebuild_index(db: str, config: str):
-    """重建向量索引（生成 phenomena、root_causes 和 ticket_anomalies）"""
+    """重建向量索引（生成 phenomena、root_causes、ticket_phenomena 和 rar_raw_tickets）"""
     from dbdiag.scripts.rebuild_index import rebuild_index as do_rebuild
 
     try:
@@ -120,25 +120,38 @@ def rebuild_index(db: str, config: str):
         sys.exit(1)
 
 
-@main.command("init-rar-index")
+@main.command("convert")
 @click.option(
-    "--db",
-    default=None,
-    help="数据库文件路径（默认: data/tickets.db）",
+    "--upstream-data",
+    required=True,
+    type=click.Path(exists=True),
+    help="上游数据文件路径（JSON 格式）",
+)
+@click.option(
+    "--output-data",
+    required=True,
+    type=click.Path(),
+    help="输出文件路径（JSON 格式）",
 )
 @click.option(
     "--config",
     default=None,
     help="配置文件路径（默认: config.yaml）",
 )
-def init_rar_index(db: str, config: str):
-    """初始化 RAR 索引（从 raw_tickets 生成 rar_raw_tickets）"""
-    from dbdiag.scripts.init_rar_index import init_rar_index as do_init
+@click.option(
+    "--concurrency",
+    default=4,
+    type=click.IntRange(1, 16),
+    help="并发数（1-16，默认: 4）",
+)
+def convert(upstream_data: str, output_data: str, config: str, concurrency: int):
+    """转换上游数据格式（使用 LLM 提取 anomalies）"""
+    from dbdiag.scripts.convert_upstream import convert_upstream_data
 
     try:
-        do_init(db, config)
+        convert_upstream_data(upstream_data, output_data, config, concurrency)
     except Exception as e:
-        click.echo(f"\n[ERROR] 初始化失败: {e}", err=True)
+        click.echo(f"\n[ERROR] 转换失败: {e}", err=True)
         sys.exit(1)
 
 

@@ -520,7 +520,7 @@ class Hypothesis:
 
 ### 4.1 检索器 (PhenomenonRetriever)
 
-**文件**: `dbdiag/core/retriever.py`
+**文件**: `dbdiag/core/gar/retriever.py`
 
 **职责**: 基于用户输入检索相关的标准现象。
 
@@ -575,7 +575,7 @@ final_score = 0.5 * fact_coverage + 0.3 * vector_score + 0.2 * novelty
 
 ### 4.2 假设追踪器 (PhenomenonHypothesisTracker)
 
-**文件**: `dbdiag/core/hypothesis_tracker.py`
+**文件**: `dbdiag/core/gar/hypothesis_tracker.py`
 
 **职责**: 维护多个并行的根因假设，动态计算和更新置信度。
 
@@ -600,32 +600,35 @@ final_score = 0.5 * fact_coverage + 0.3 * vector_score + 0.2 * novelty
 **置信度计算公式**:
 
 ```python
-def compute_confidence(root_cause, confirmed_facts, confirmed_phenomena, denied_phenomena):
-    # 1. 事实匹配度（权重 50%）- LLM 评估事实对假设的支持程度
-    fact_score = evaluate_facts_for_hypothesis(root_cause, confirmed_facts)
+def _compute_confidence(root_cause_id, supporting_phenomena, confirmed_phenomena, denied_phenomenon_ids):
+    # 1. 现象确认进度（权重 60%）
+    # 查询该根因关联的所有现象，计算确认的相关现象占比
+    related_phenomenon_ids = get_phenomena_for_root_cause(root_cause_id)
+    confirmed_relevant_count = len(confirmed_ids & related_phenomenon_ids)
+    total_for_root_cause = max(len(related_phenomenon_ids), 1)
+    progress = confirmed_relevant_count / total_for_root_cause
 
-    # 2. 现象确认进度（权重 30%）
-    phenomenon_progress = confirmed_count / total_phenomena
+    # 2. 根因流行度（权重 20%）- 支持该根因的现象越多，流行度越高
+    frequency_score = min(len(supporting_phenomena) / 5, 1.0)
 
-    # 3. 根因流行度（权重 10%）
-    frequency_score = min(ticket_count / 10, 1.0)
-
-    # 4. 问题描述相似度（权重 10%）
-    desc_similarity = cosine_similarity(user_problem, root_cause)
+    # 3. 基础相关性（权重 20%）- 当有确认时给满分
+    relevance_score = 1.0 if confirmed_relevant_count > 0 else 0.5
 
     # 综合计算
-    confidence = 0.5 * fact_score + 0.3 * phenomenon_progress + 0.1 * frequency_score + 0.1 * desc_similarity
+    confidence = 0.6 * progress + 0.2 * frequency_score + 0.2 * relevance_score
 
-    # 5. 否定惩罚：每个被否定的相关现象降低 15% 置信度
+    # 4. 否定惩罚：每个被否定的相关现象降低 15% 置信度
+    denied_relevant_count = len(denied_phenomenon_ids & related_phenomenon_ids)
     if denied_relevant_count > 0:
-        confidence *= (1 - denied_relevant_count * 0.15)
+        denial_penalty = denied_relevant_count * 0.15
+        confidence = confidence * (1 - denial_penalty)
 
-    return confidence
+    return min(max(confidence, 0.0), 1.0)
 ```
 
 ### 4.3 推荐引擎 (PhenomenonRecommendationEngine)
 
-**文件**: `dbdiag/core/recommender.py`
+**文件**: `dbdiag/core/gar/recommender.py`
 
 **职责**: 根据当前假设状态，推荐下一波需要观察的现象。
 
@@ -688,12 +691,21 @@ def specificity(p):
 
 **3. hypothesis_priority(p) - 假设优先级**
 
-关联根因中最高的置信度。优先验证高置信度假设相关的现象。
+关联根因的置信度，加权 ticket_count。票数越多支持越强。
 
 ```python
 def hypothesis_priority(p):
-    """关联根因中最高的置信度"""
-    return max(confidence(r) for r in R_p)
+    """关联根因的置信度，加权 ticket_count"""
+    max_priority = 0.0
+    for r in R_p:
+        confidence = get_confidence(r)
+        # 使用 sqrt 平滑，避免票数差异过大导致的极端影响
+        ticket_count = get_ticket_count_for_phenomenon(p, r)
+        support_weight = (ticket_count / max_ticket_count) ** 0.5
+        # 综合得分 = 置信度 * 支持权重
+        weighted_priority = confidence * (0.7 + 0.3 * support_weight)
+        max_priority = max(max_priority, weighted_priority)
+    return max_priority
 ```
 
 **4. information_gain(p) - 信息增益**
@@ -793,7 +805,7 @@ def recommend_phenomena(session, n=3):
 
 ### 4.4 响应生成器 (ResponseGenerator)
 
-**文件**: `dbdiag/core/response_generator.py`
+**文件**: `dbdiag/core/gar/response_generator.py`
 
 **职责**: 使用 LLM 生成用户可读的诊断响应。
 
@@ -838,7 +850,7 @@ def generate_diagnosis_summary(
 
 ### 4.5 对话管理器 (GARDialogueManager)
 
-**文件**: `dbdiag/core/dialogue_manager.py`
+**文件**: `dbdiag/core/gar/dialogue_manager.py`
 
 **职责**: 整合所有组件，管理对话流程。
 

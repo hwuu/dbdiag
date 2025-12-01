@@ -278,13 +278,16 @@ class TestRebuildIndex:
                 [0.0, 1.0, 0.0],  # IO 瓶颈
                 [0.0, 0.0, 1.0],  # 连接泄漏
             ]
+            # RAR combined_text embeddings（3 个工单）
+            rar_embeddings = [[0.5] * 3] * 3
 
             with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
-                # encode_batch 被调用两次：先是 anomalies，后是 root_causes
+                # encode_batch 被调用三次：anomalies, root_causes, RAR combined_text
                 mock_embedding_instance.encode_batch.side_effect = [
                     anomaly_embeddings,
                     root_cause_embeddings,
+                    rar_embeddings,
                 ]
                 MockEmbedding.return_value = mock_embedding_instance
 
@@ -330,13 +333,16 @@ class TestRebuildIndex:
                 [0.0, 1.0, 0.0],  # IO 瓶颈
                 [0.0, 0.0, 1.0],  # 连接泄漏
             ]
+            # RAR combined_text embeddings（3 个工单）
+            rar_embeddings = [[0.5] * 3] * 3
 
             with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
                 mock_embedding_instance = Mock()
-                # encode_batch 被调用两次：先是 anomalies，后是 root_causes
+                # encode_batch 被调用三次：anomalies, root_causes, RAR combined_text
                 mock_embedding_instance.encode_batch.side_effect = [
                     anomaly_embeddings,
                     root_cause_embeddings,
+                    rar_embeddings,
                 ]
                 MockEmbedding.return_value = mock_embedding_instance
 
