@@ -2,9 +2,14 @@
 
 使用 OpenAI SDK 调用兼容 OpenAI API 的 LLM 服务
 """
+import re
 from typing import List, Dict, Optional
 import openai
 from dbdiag.utils.config import Config
+
+
+# 匹配 <think>...</think> 标签（支持多行）
+THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
 class LLMService:
@@ -65,7 +70,25 @@ class LLMService:
             max_tokens=self.max_tokens,
         )
 
-        return response.choices[0].message.content
+        return self._clean_response(response.choices[0].message.content)
+
+    def _clean_response(self, content: str) -> str:
+        """清理 LLM 响应
+
+        - 去除 <think>...</think> 标签（模型的思考过程）
+        - 去除首尾空白
+
+        Args:
+            content: 原始响应内容
+
+        Returns:
+            清理后的响应内容
+        """
+        if not content:
+            return ""
+        # 去除 <think>...</think> 标签
+        content = THINK_TAG_PATTERN.sub("", content)
+        return content.strip()
 
     def generate_simple(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """

@@ -1,12 +1,13 @@
 """上游数据转换脚本
 
 将上游原始工单数据转换为 example_tickets.json 格式。
+支持断点续传：中断后重新运行会跳过已转换的工单。
 
 上游格式:
 {
     "流程ID": "...",
     "问题描述": "...",
-    "问题跟因": "...",
+    "问题根因": "...",
     "恢复方法和规避措施": "...",
     "分析过程": "...",
     ...
@@ -24,8 +25,9 @@
 """
 import asyncio
 import json
+import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 from tqdm import tqdm
 
@@ -83,6 +85,90 @@ INFER_METADATA_PROMPT = """你是数据库运维专家。请根据以下工单�
 只输出 JSON 对象，不要其他内容。"""
 
 
+class CheckpointManager:
+    """检查点管理器，支持断点续传"""
+
+    def __init__(self, output_path: str):
+        """初始化检查点管理器
+
+        Args:
+            output_path: 输出文件路径
+        """
+        self.output_path = output_path
+        self.checkpoint_path = f"{output_path}.checkpoint.json"
+        self.completed_ticket_ids: Set[str] = set()
+        self.results: List[Dict[str, Any]] = []
+        self._lock = asyncio.Lock()
+
+    def load(self) -> bool:
+        """加载检查点
+
+        Returns:
+            是否存在检查点
+        """
+        if not os.path.exists(self.checkpoint_path):
+            return False
+
+        try:
+            with open(self.checkpoint_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.completed_ticket_ids = set(data.get("completed_ticket_ids", []))
+            self.results = data.get("results", [])
+            return True
+        except Exception as e:
+            print(f"[WARN] 加载检查点失败: {e}")
+            return False
+
+    def save(self) -> None:
+        """保存检查点"""
+        try:
+            data = {
+                "completed_ticket_ids": list(self.completed_ticket_ids),
+                "results": self.results,
+            }
+            with open(self.checkpoint_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[WARN] 保存检查点失败: {e}")
+
+    async def add_result(self, result: Dict[str, Any]) -> None:
+        """添加转换结果（线程安全）
+
+        Args:
+            result: 转换后的工单数据
+        """
+        async with self._lock:
+            ticket_id = result.get("ticket_id", "")
+            if ticket_id and ticket_id not in self.completed_ticket_ids:
+                self.completed_ticket_ids.add(ticket_id)
+                self.results.append(result)
+                self.save()
+
+    def is_completed(self, ticket_id: str) -> bool:
+        """检查工单是否已转换
+
+        Args:
+            ticket_id: 工单 ID
+
+        Returns:
+            是否已转换
+        """
+        return ticket_id in self.completed_ticket_ids
+
+    def cleanup(self) -> None:
+        """清理检查点文件"""
+        if os.path.exists(self.checkpoint_path):
+            os.remove(self.checkpoint_path)
+
+    def get_results(self) -> List[Dict[str, Any]]:
+        """获取所有结果（按 ticket_id 排序）
+
+        Returns:
+            转换结果列表
+        """
+        return sorted(self.results, key=lambda x: x.get("ticket_id", ""))
+
+
 class UpstreamConverter:
     """上游数据转换器"""
 
@@ -90,15 +176,18 @@ class UpstreamConverter:
         self,
         llm_service: LLMService,
         concurrency: int = 4,
+        checkpoint: Optional[CheckpointManager] = None,
     ):
         """初始化转换器
 
         Args:
             llm_service: LLM 服务实例
             concurrency: 并发数（1-16）
+            checkpoint: 检查点管理器（用于断点续传）
         """
         self.llm_service = llm_service
         self.concurrency = max(1, min(16, concurrency))
+        self.checkpoint = checkpoint
         self._semaphore: Optional[asyncio.Semaphore] = None
 
     async def convert_all(
@@ -117,26 +206,46 @@ class UpstreamConverter:
         """
         self._semaphore = asyncio.Semaphore(self.concurrency)
 
+        # 过滤已完成的工单（断点续传）
+        pending_data = upstream_data
+        skipped_count = 0
+        if self.checkpoint:
+            pending_data = [
+                item for item in upstream_data
+                if not self.checkpoint.is_completed(item.get("流程ID", ""))
+            ]
+            skipped_count = len(upstream_data) - len(pending_data)
+            if skipped_count > 0:
+                print(f"  [断点续传] 跳过已完成: {skipped_count} 条")
+
         # 创建任务
         tasks = []
-        for item in upstream_data:
+        for item in pending_data:
             task = self._convert_one_with_semaphore(item)
             tasks.append(task)
 
         # 并发执行并收集结果
-        results = []
-        completed = 0
-        total = len(tasks)
+        completed = skipped_count  # 从已跳过的数量开始
+        total = len(upstream_data)
 
         for coro in asyncio.as_completed(tasks):
             result = await coro
-            if result is not None:
-                results.append(result)
+            if result is not None and self.checkpoint:
+                await self.checkpoint.add_result(result)
             completed += 1
             if progress_callback:
                 progress_callback(completed, total)
 
-        # 按 ticket_id 排序
+        # 返回所有结果（包括之前保存的）
+        if self.checkpoint:
+            return self.checkpoint.get_results()
+
+        # 如果没有 checkpoint，收集本次结果
+        results = []
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if result is not None:
+                results.append(result)
         results.sort(key=lambda x: x.get("ticket_id", ""))
         return results
 
@@ -164,7 +273,7 @@ class UpstreamConverter:
             # 直接映射字段
             ticket_id = upstream_item.get("流程ID", "")
             description = upstream_item.get("问题描述", "")
-            root_cause = upstream_item.get("问题跟因", "")
+            root_cause = upstream_item.get("问题根因", "")
             solution = upstream_item.get("恢复方法和规避措施", "")
             analysis_process = upstream_item.get("分析过程", "")
 
@@ -321,7 +430,7 @@ def convert_upstream_data(
     config_path: Optional[str] = None,
     concurrency: int = 4,
 ) -> None:
-    """转换上游数据
+    """转换上游数据（支持断点续传）
 
     Args:
         upstream_path: 上游数据文件路径
@@ -338,6 +447,12 @@ def convert_upstream_data(
     config = load_config(config_path)
     llm_service = LLMService(config)
 
+    # 初始化检查点管理器
+    checkpoint = CheckpointManager(output_path)
+    has_checkpoint = checkpoint.load()
+    if has_checkpoint:
+        print(f"  [断点续传] 检测到检查点，已完成 {len(checkpoint.completed_ticket_ids)} 条")
+
     # 读取上游数据
     print(f"\n[1/3] 读取上游数据...")
     with open(upstream_path, "r", encoding="utf-8") as f:
@@ -349,11 +464,16 @@ def convert_upstream_data(
     print(f"  共 {len(upstream_data)} 条工单")
 
     # 创建转换器
-    converter = UpstreamConverter(llm_service, concurrency)
+    converter = UpstreamConverter(llm_service, concurrency, checkpoint)
 
     # 使用 tqdm 显示进度
     print(f"\n[2/3] 转换工单...")
     pbar = tqdm(total=len(upstream_data), desc="  转换进度", unit="条")
+
+    # 如果有检查点，设置初始进度
+    if has_checkpoint:
+        pbar.n = len(checkpoint.completed_ticket_ids)
+        pbar.refresh()
 
     def progress_callback(completed: int, total: int):
         pbar.n = completed
@@ -375,6 +495,8 @@ def convert_upstream_data(
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
+    # 清理检查点
+    checkpoint.cleanup()
     print(f"\n[OK] 转换完成: {output_path}")
 
 

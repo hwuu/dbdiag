@@ -428,28 +428,69 @@ class RARCLI:
         self.session_id: Optional[str] = None
         self.round_count: int = 0
 
+        # 统计（与 GAR 保持一致）
+        self.stats = {
+            "recommended": 0,  # 推荐的现象数
+            "confirmed": 0,    # 确认的现象数
+            "denied": 0,       # 否认的现象数
+            "confidence": 0.0, # 当前置信度
+        }
+
     def _print_indented(self, content, num_spaces: int = 2) -> None:
         """打印带缩进的 Rich 对象"""
         from rich.padding import Padding
         self.console.print(Padding(content, (0, 0, 0, num_spaces)))
 
+    def _render_footer(self) -> Group:
+        """渲染底部状态栏（与 GAR 保持一致）"""
+        # 第一行：轮次、推荐、确认、否认（横向）
+        stats_text = Text()
+        stats_text.append("轮次 ", style="dim")
+        stats_text.append(str(self.round_count), style="bold")
+        stats_text.append("  │  ", style="dim")
+        stats_text.append("推荐 ", style="dim")
+        stats_text.append(str(self.stats["recommended"]), style="bold")
+        stats_text.append("  │  ", style="dim")
+        stats_text.append("确认 ", style="dim")
+        stats_text.append(str(self.stats["confirmed"]), style="bold green")
+        stats_text.append("  │  ", style="dim")
+        stats_text.append("否认 ", style="dim")
+        stats_text.append(str(self.stats["denied"]), style="bold red")
+
+        content_parts = [stats_text]
+
+        # 置信度条
+        conf = self.stats["confidence"]
+        content_parts.append(Text(""))  # 空行
+        conf_line = Text()
+        bar_filled = int(conf * 10)
+        bar_empty = 10 - bar_filled
+        conf_line.append("1. ", style="dim")
+        conf_line.append("█" * bar_filled, style="green" if conf >= 0.7 else "yellow")
+        conf_line.append("░" * bar_empty, style="dim")
+        conf_line.append(f" {conf:.0%} ", style="bold")
+        conf_line.append("当前置信度")
+        content_parts.append(conf_line)
+
+        return Group(*content_parts)
+
     def _render_recommendation(self, response: dict):
-        """渲染推荐响应"""
+        """渲染推荐响应（与 GAR 格式对齐）"""
         recommendations = response.get("recommendations", [])
         reasoning = response.get("reasoning", "")
         confidence = response.get("confidence", 0.0)
 
-        # 置信度
-        self._print_indented(Text(f"置信度: {confidence:.0%}", style="dim"))
+        # 更新统计
+        self.stats["confidence"] = confidence
+        self.stats["recommended"] += len(recommendations)
+
+        # 先显示状态栏（与 GAR 一致）
+        self._print_indented(self._render_footer())
         self.console.print()
 
-        if reasoning:
-            self._print_indented(Text(f"分析: {reasoning}", style="italic"))
-            self.console.print()
-
         if recommendations:
-            self._print_indented(Text(f"建议检查以下 {len(recommendations)} 个现象：", style="bold yellow"))
-            self.console.print()
+            self._print_indented(Text(f"建议确认以下 {len(recommendations)} 个现象：", style="bold yellow"))
+            self._print_indented(Text(""))
 
             for i, rec in enumerate(recommendations, 1):
                 obs = rec.get("observation", "")
@@ -457,39 +498,47 @@ class RARCLI:
                 why = rec.get("why", "")
                 related = rec.get("related_root_causes", [])
 
-                # 标题
+                # 标题行（与 GAR 格式对齐）
                 title = Text()
                 title.append(f"[{i}] ", style="bold yellow")
                 title.append(obs, style="bold")
                 self._print_indented(title)
 
-                # 观察方法
+                # 描述（与 GAR 观察方法一致）
                 if method:
-                    self._print_indented(Text(f"方法: {method}", style="dim"), num_spaces=6)
+                    self._print_indented(Text("观察方法:", style="dim"), num_spaces=6)
+                    self._print_indented(Text(method.strip()), num_spaces=6)
 
-                # 原因
+                # 推荐原因（与 GAR 格式一致）
                 if why:
-                    self._print_indented(Text(f"原因: {why}", style="italic"), num_spaces=6)
+                    self._print_indented(Text(f"推荐原因: {why}", style="italic dim"), num_spaces=6)
 
                 # 相关根因
                 if related:
                     self._print_indented(Text(f"可能根因: {', '.join(related)}", style="cyan"), num_spaces=6)
 
-                self.console.print()
+                self._print_indented(Text(""))  # 空行
 
-            self._print_indented(Text("请检查上述现象并反馈结果（如：1确认 2否定）", style="bold yellow"))
+            self._print_indented(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
         else:
             self._print_indented(Text("暂无推荐，请提供更多信息", style="yellow"))
         self._print_indented(Text(""))
 
     def _render_diagnosis(self, response: dict):
-        """渲染诊断响应"""
+        """渲染诊断响应（与 GAR 格式对齐）"""
         root_cause = response.get("root_cause", "未知")
         confidence = response.get("confidence", 0.0)
         reasoning = response.get("reasoning", "")
         solution = response.get("solution", "")
         cited_tickets = response.get("cited_tickets", [])
+        observed_phenomena = response.get("observed_phenomena", [])
         forced = response.get("forced", False)
+
+        # 更新统计
+        self.stats["confidence"] = confidence
+
+        # 先显示状态栏
+        self._print_indented(self._render_footer())
 
         content_parts = []
 
@@ -499,39 +548,51 @@ class RARCLI:
         info.append(f"{root_cause}\n", style="green bold")
         content_parts.append(info)
 
-        # 置信度
-        conf_text = Text()
-        conf_text.append("置信度: ", style="bold")
-        conf_text.append(f"{confidence:.0%}", style="yellow" if confidence < 0.7 else "green")
-        if forced:
-            conf_text.append(" (强制诊断)", style="red")
-        content_parts.append(conf_text)
-        content_parts.append(Text(""))
+        # 构建 Markdown 诊断报告（与 GAR 一致）
+        diagnosis_md_parts = []
 
-        # 分析
+        # 观察到的现象
+        if observed_phenomena:
+            diagnosis_md_parts.append("### 观察到的现象\n")
+            for i, obs in enumerate(observed_phenomena, 1):
+                diagnosis_md_parts.append(f"{i}. {obs}\n")
+            diagnosis_md_parts.append("\n")
+
+        # 推理链路
         if reasoning:
-            content_parts.append(Text("分析:", style="bold"))
-            content_parts.append(Text(reasoning))
-            content_parts.append(Text(""))
+            diagnosis_md_parts.append("### 推理链路\n")
+            diagnosis_md_parts.append(f"{reasoning}\n\n")
 
-        # 解决方案
+        # 恢复措施
         if solution:
-            content_parts.append(Text("解决方案:", style="bold"))
-            content_parts.append(Markdown(solution))
+            diagnosis_md_parts.append("### 恢复措施\n")
+            diagnosis_md_parts.append(f"{solution}\n")
+
+        if diagnosis_md_parts:
+            md = Markdown("".join(diagnosis_md_parts), justify="left")
+            content_parts.append(md)
             content_parts.append(Text(""))
 
-        # 引用工单
+        # 引用工单（与 GAR 格式一致）
         if cited_tickets:
-            content_parts.append(Text(f"参考工单: {', '.join(cited_tickets)}", style="cyan"))
+            content_parts.append(Text("引用工单", style="bold"))
+            content_parts.append(Text(""))
+            for i, ticket_id in enumerate(cited_tickets, 1):
+                cite_text = Text()
+                cite_text.append(f"[{i}] ", style="dim")
+                cite_text.append(f"{ticket_id}", style="bold cyan")
+                content_parts.append(cite_text)
 
+        # 使用 Panel 包装（与 GAR 一致）
         panel = Panel(
             Group(*content_parts),
-            title="✓ 诊断结论" if not forced else "⚠ 诊断结论（信息不足）",
+            title="✓ 根因已定位" if not forced else "⚠ 根因已定位（信息不足）",
             title_align="left",
             border_style="green" if not forced else "yellow",
             width=min(100, self.console.width),
             padding=(1, 2),
         )
+        self._print_indented(Text(""))
         self._print_indented(panel)
 
     def _handle_message(self, user_message: str) -> bool:
@@ -574,15 +635,17 @@ class RARCLI:
         """解析用户反馈并更新状态"""
         import re
         # 解析 "1确认 2否定" 格式
-        confirm_pattern = re.findall(r"(\d+)\s*确认", message)
-        deny_pattern = re.findall(r"(\d+)\s*否定", message)
+        confirm_matches = re.findall(r"(\d+)\s*确认", message)
+        deny_matches = re.findall(r"(\d+)\s*否定", message)
 
-        # 这里简化处理，假设用户直接描述观察结果
-        # 实际应该根据推荐的索引来确认/否定
-        if "确认" in message and "否定" not in message:
-            # 全部确认
+        # 更新统计
+        self.stats["confirmed"] += len(confirm_matches)
+        self.stats["denied"] += len(deny_matches)
+
+        # 更新 dialogue_manager 状态
+        for _ in confirm_matches:
             self.dialogue_manager.confirm_observation(message)
-        elif "否定" in message:
+        for _ in deny_matches:
             self.dialogue_manager.deny_observation(message)
 
     def _handle_command(self, command: str) -> bool:
@@ -604,6 +667,7 @@ class RARCLI:
         elif command == "/reset":
             self.session_id = None
             self.round_count = 0
+            self.stats = {"recommended": 0, "confirmed": 0, "denied": 0, "confidence": 0.0}
             self.dialogue_manager.state = None
             self.console.print(Text("已重置会话，请重新描述问题", style="green"))
             return False

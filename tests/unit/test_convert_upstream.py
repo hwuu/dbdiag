@@ -12,8 +12,95 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.convert_upstream import (
     UpstreamConverter,
+    CheckpointManager,
     convert_upstream_data,
 )
+
+
+class TestCheckpointManager:
+    """CheckpointManager 测试"""
+
+    def test_checkpoint_save_and_load(self):
+        """测试: 检查点保存和加载"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.json")
+            checkpoint = CheckpointManager(output_path)
+
+            # 添加结果
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-001", "data": "test1"}))
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-002", "data": "test2"}))
+
+            # 验证检查点文件存在
+            assert os.path.exists(checkpoint.checkpoint_path)
+
+            # 创建新的 checkpoint 实例并加载
+            checkpoint2 = CheckpointManager(output_path)
+            has_checkpoint = checkpoint2.load()
+
+            assert has_checkpoint is True
+            assert len(checkpoint2.completed_ticket_ids) == 2
+            assert "T-001" in checkpoint2.completed_ticket_ids
+            assert "T-002" in checkpoint2.completed_ticket_ids
+            assert len(checkpoint2.results) == 2
+
+    def test_is_completed(self):
+        """测试: 检查工单是否已完成"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.json")
+            checkpoint = CheckpointManager(output_path)
+
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-001"}))
+
+            assert checkpoint.is_completed("T-001") is True
+            assert checkpoint.is_completed("T-002") is False
+
+    def test_cleanup(self):
+        """测试: 清理检查点文件"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.json")
+            checkpoint = CheckpointManager(output_path)
+
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-001"}))
+            assert os.path.exists(checkpoint.checkpoint_path)
+
+            checkpoint.cleanup()
+            assert not os.path.exists(checkpoint.checkpoint_path)
+
+    def test_get_results_sorted(self):
+        """测试: 获取结果按 ticket_id 排序"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.json")
+            checkpoint = CheckpointManager(output_path)
+
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-003"}))
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-001"}))
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-002"}))
+
+            results = checkpoint.get_results()
+            assert results[0]["ticket_id"] == "T-001"
+            assert results[1]["ticket_id"] == "T-002"
+            assert results[2]["ticket_id"] == "T-003"
+
+    def test_no_duplicate_results(self):
+        """测试: 不会添加重复结果"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.json")
+            checkpoint = CheckpointManager(output_path)
+
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-001", "data": "v1"}))
+            asyncio.run(checkpoint.add_result({"ticket_id": "T-001", "data": "v2"}))
+
+            assert len(checkpoint.results) == 1
+            assert checkpoint.results[0]["data"] == "v1"
+
+    def test_load_nonexistent_checkpoint(self):
+        """测试: 加载不存在的检查点返回 False"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.json")
+            checkpoint = CheckpointManager(output_path)
+
+            has_checkpoint = checkpoint.load()
+            assert has_checkpoint is False
 
 
 class TestUpstreamConverter:
@@ -33,7 +120,7 @@ class TestUpstreamConverter:
         upstream_item = {
             "流程ID": "TICKET-001",
             "问题描述": "查询变慢",
-            "问题跟因": "索引膨胀",
+            "问题根因": "索引膨胀",
             "恢复方法和规避措施": "REINDEX",
             "分析过程": "",
         }
@@ -175,7 +262,7 @@ class TestConvertUpstreamData:
                 {
                     "流程ID": "T-001",
                     "问题描述": "查询变慢",
-                    "问题跟因": "索引膨胀",
+                    "问题根因": "索引膨胀",
                     "恢复方法和规避措施": "REINDEX",
                     "分析过程": "发现 wait_io 高",
                 }
