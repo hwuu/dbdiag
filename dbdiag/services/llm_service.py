@@ -71,7 +71,7 @@ class LLMService:
             curl_cmd = f"""curl -X POST '{self.config.llm.api_base}/chat/completions' \\
   -H 'Content-Type: application/json' \\
   -H 'Authorization: Bearer {self.config.llm.api_key[:10]}...' \\
-  -d '{json.dumps(request_body, ensure_ascii=False)[:500]}...'"""
+  -d '{json.dumps(request_body, ensure_ascii=False)}'"""
             print(f"\n[DEBUG CURL]\n{curl_cmd}\n")
 
         # 调用 API
