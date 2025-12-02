@@ -2,8 +2,9 @@
 
 CLI 和 Web 服务共用的渲染逻辑。
 """
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
+from rich.box import SIMPLE
 from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -171,16 +172,18 @@ class DiagnosisRenderer:
         root_cause: str,
         diagnosis_summary: str = "",
         citations: list = None,
-    ) -> Panel:
+        show_border: bool = True,
+    ) -> Union[Panel, Group]:
         """渲染诊断结果
 
         Args:
             root_cause: 根因描述
             diagnosis_summary: 诊断总结（Markdown）
             citations: 引用工单 [{"ticket_id": str, "description": str}, ...]
+            show_border: 是否显示边框（默认 True）
 
         Returns:
-            Rich Panel 对象
+            Rich Panel 或 Group 对象
         """
         content_parts = []
 
@@ -207,7 +210,13 @@ class DiagnosisRenderer:
                 cite_text.append(f": {citation['description']}")
                 content_parts.append(cite_text)
 
-        # 使用 Panel 包装
+        # 无边框模式：直接返回 Group
+        if not show_border:
+            # 添加标题
+            title_text = Text("✓ 根因已定位", style="green bold")
+            return Group(title_text, Text(""), *content_parts)
+
+        # 使用 Panel 包装（有边框）
         panel = Panel(
             Group(*content_parts),
             title="✓ 根因已定位",

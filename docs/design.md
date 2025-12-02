@@ -1278,7 +1278,7 @@ class HybCLI(GARCLI):
 class WebChatSession:
     def __init__(self, websocket: WebSocket, config: dict):
         self.websocket = websocket
-        self.console = Console(record=True)  # 记录输出为 HTML
+        self.console = Console(record=True, width=150)  # 记录输出为 HTML
         self.renderer = DiagnosisRenderer(self.console)
         self.diagnosis_mode = config.get("web", {}).get("diagnosis_mode", "hyb")
 
@@ -1287,6 +1287,9 @@ class WebChatSession:
 
     def render_welcome(self) -> str:
         """渲染欢迎消息"""
+
+    def _export_html(self) -> str:
+        """导出 HTML 并清理样式（移除背景色、ANSI 控制序列）"""
 ```
 
 #### 4.7.3 消息协议

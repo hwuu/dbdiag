@@ -3,11 +3,14 @@
 提供基于 WebSocket 的实时诊断交互。
 每个 WebSocket 连接拥有独立的会话状态。
 """
+import re
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from rich.console import Console
+from rich.theme import Theme
+import rich.markdown
 
 from dbdiag.core.gar.dialogue_manager import GARDialogueManager
 from dbdiag.services.llm_service import LLMService
@@ -15,6 +18,16 @@ from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
 from dbdiag.cli.rendering import DiagnosisRenderer
 from dbdiag.dao import RootCauseDAO
+
+
+# Monkey patch: 修复 Rich Markdown 标题默认居中的问题
+def _left_aligned_heading_console(self, console, options):
+    """左对齐的标题渲染"""
+    self.text.justify = "left"
+    yield self.text
+
+
+rich.markdown.Heading.__rich_console__ = _left_aligned_heading_console
 
 # 创建路由
 router = APIRouter()
@@ -25,6 +38,17 @@ class WebChatSession:
 
     每个 WebSocket 连接对应一个独立的会话实例。
     """
+
+    # 移除背景色的正则表达式
+    _BG_PATTERN = re.compile(r'background-color:\s*#[0-9a-fA-F]+;?', re.IGNORECASE)
+    # 移除 ANSI 控制序列
+    _ANSI_PATTERN = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\[H')
+
+    # 暗色主题
+    _DARK_THEME = Theme({
+        "dim": "#888888",
+        "default": "#d4d4d4",
+    })
 
     def __init__(self, websocket: WebSocket, config: dict):
         """初始化会话
@@ -37,7 +61,12 @@ class WebChatSession:
         self.config = config
 
         # 使用 record=True 捕获输出为 HTML
-        self.console = Console(record=True, force_terminal=True, width=100)
+        self.console = Console(
+            record=True,
+            force_terminal=True,
+            width=150,
+            theme=self._DARK_THEME,
+        )
         self.renderer = DiagnosisRenderer(self.console)
 
         # 数据库路径
@@ -112,7 +141,6 @@ class WebChatSession:
     async def _process_diagnosis(self, content: str) -> dict:
         """处理诊断消息"""
         self._init_services()
-        self.console.clear()  # 清除之前的记录
 
         self.round_count += 1
 
@@ -160,12 +188,11 @@ class WebChatSession:
             self.console.print(f"  [red]处理失败: {str(e)}[/red]")
 
         # 导出为 HTML
-        html = self.console.export_html(inline_styles=True)
+        html = self._export_html()
         return {"type": "output", "html": html}
 
     async def _process_command(self, command: str) -> dict:
         """处理 CLI 命令"""
-        self.console.clear()
         command = command.lower().strip()
 
         if command == "/help":
@@ -196,13 +223,13 @@ class WebChatSession:
 
         elif command == "/exit":
             self.console.print("[blue]再见！[/blue]")
-            html = self.console.export_html(inline_styles=True)
+            html = self._export_html()
             return {"type": "close", "html": html}
 
         else:
             self.console.print(f"[red]未知命令: {command}[/red]，输入 /help 查看可用命令")
 
-        html = self.console.export_html(inline_styles=True)
+        html = self._export_html()
         return {"type": "output", "html": html}
 
     def _render_phenomenon_recommendation(self, response: dict):
@@ -237,13 +264,14 @@ class WebChatSession:
         diagnosis_summary = response.get("diagnosis_summary", "")
         citations = response.get("citations", [])
 
-        panel = self.renderer.render_diagnosis_result(
+        result = self.renderer.render_diagnosis_result(
             root_cause=root_cause,
             diagnosis_summary=diagnosis_summary,
             citations=citations,
+            show_border=False,  # Web 不显示边框
         )
         self.console.print()
-        self.console.print("  ", panel)
+        self.console.print("  ", result)
 
     def _update_stats_from_session(self):
         """从 session 更新统计信息"""
@@ -265,8 +293,6 @@ class WebChatSession:
 
     def render_welcome(self) -> str:
         """渲染欢迎消息"""
-        self.console.clear()
-
         # LOGO
         logo = self.renderer.get_logo(self.diagnosis_mode)
         if self.diagnosis_mode == "hyb":
@@ -285,12 +311,23 @@ class WebChatSession:
         self.console.print("[bold yellow]请描述您遇到的数据库问题开始诊断。[/bold yellow]")
         self.console.print()
 
-        return self.console.export_html(inline_styles=True)
+        return self._export_html()
 
     def cleanup(self):
         """清理会话资源"""
         # 目前无需特殊清理
         pass
+
+    def _export_html(self) -> str:
+        """导出 HTML 并清理样式"""
+        html = self.console.export_html(inline_styles=True, clear=True)
+        # 移除 Rich 导出的背景色
+        html = self._BG_PATTERN.sub('', html)
+        # 移除 ANSI 控制序列
+        html = self._ANSI_PATTERN.sub('', html)
+        # 移除残留的控制字符
+        html = html.replace('[H', '').replace('\x1b', '')
+        return html
 
 
 # 全局配置（延迟加载）

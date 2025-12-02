@@ -2,23 +2,32 @@
 
 * {
     box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    height: 100%;
 }
 
 body {
-    margin: 0;
-    padding: 0;
+    height: 100%;
+    overflow: hidden;
     background: #1e1e1e;
     color: #d4d4d4;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-    font-size: 14px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 12px;
     line-height: 1.5;
 }
 
 #terminal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     max-width: 1000px;
     margin: 0 auto;
-    padding: 20px;
-    min-height: 100vh;
     display: flex;
     flex-direction: column;
 }
@@ -26,33 +35,46 @@ body {
 #output {
     flex: 1;
     overflow-y: auto;
-    padding-bottom: 20px;
+    padding: 20px;
 }
 
 .output-block {
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    background: #252526 !important;
+    padding: 12px 16px;
+    border-radius: 6px;
+    color: #d4d4d4;
+    line-height: 1.2;
 }
 
-/* Rich HTML 导出样式覆盖 */
+/* Rich HTML 导出样式强制覆盖 */
+.output-block,
+.output-block *,
+.output-block pre,
+.output-block code,
+.output-block div,
+.output-block span {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
 .output-block pre {
     margin: 0;
     white-space: pre-wrap;
     word-wrap: break-word;
-    background: transparent !important;
+    font-family: inherit;
 }
 
 .output-block code {
-    background: transparent !important;
     font-family: inherit;
 }
 
 #input-line {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
-    padding: 10px 0;
-    border-top: 1px solid #333;
-    position: sticky;
-    bottom: 0;
+    padding: 15px 20px;
+    border-top: 1px solid #444;
     background: #1e1e1e;
 }
 
@@ -108,11 +130,6 @@ body {
     font-style: italic;
 }
 
-/* 颜色类 */
-.green, [style*="color: #"] {
-    /* 保留 inline style */
-}
-
 /* 滚动条样式 */
 #output::-webkit-scrollbar {
     width: 8px;
@@ -133,7 +150,11 @@ body {
 
 /* 响应式 */
 @media (max-width: 768px) {
-    #terminal {
+    #output {
+        padding: 10px;
+    }
+
+    #input-line {
         padding: 10px;
     }
 

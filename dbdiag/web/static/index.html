@@ -50,6 +50,13 @@
                 const div = document.createElement('div');
                 div.className = 'output-block';
                 div.innerHTML = msg.html;
+
+                // 清理内联背景色
+                div.querySelectorAll('*').forEach(el => {
+                    el.style.removeProperty('background');
+                    el.style.removeProperty('background-color');
+                });
+
                 output.appendChild(div);
 
                 // 滚动到底部
@@ -60,6 +67,13 @@
                     const div = document.createElement('div');
                     div.className = 'output-block';
                     div.innerHTML = msg.html;
+
+                    // 清理内联背景色
+                    div.querySelectorAll('*').forEach(el => {
+                        el.style.removeProperty('background');
+                        el.style.removeProperty('background-color');
+                    });
+
                     output.appendChild(div);
                 }
                 ws.close();
