@@ -31,9 +31,10 @@
 **架构**：多模块协作
 
 ```
-用户输入 → Retriever → HypothesisTracker → Recommender → ResponseGenerator
-              ↓              ↓                  ↓
-         检索现象      追踪假设置信度      多因素打分推荐
+User Input → Retriever → HypothesisTracker → Recommender → ResponseGenerator
+                ↓              ↓                  ↓
+         Retrieve         Track Hypo          Multi-factor
+         Phenomena        Confidence          Scoring
 ```
 
 **数据依赖**：`phenomena`、`root_causes`、`phenomenon_root_causes` 等预处理表
@@ -59,9 +60,9 @@
 **架构**：RAG + LLM 端到端
 
 ```
-用户输入 → RAG 检索 raw_tickets → LLM 推理决策 → 输出
-                                      ↓
-                          推荐现象 或 诊断结论
+User Input → RAG Retrieval raw_tickets → LLM Reasoning → Output
+                                            ↓
+                               Recommend Phenomena or Diagnose
 ```
 
 **数据依赖**：`raw_tickets`（单表，无需预处理）
@@ -133,48 +134,48 @@
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│                           每轮对话流程                                │
+│                        Per-Turn Dialogue Flow                         │
 ├───────────────────────────────────────────────────────────────────────┤
 │                                                                       │
-│  用户输入                                                             │
+│  User Input                                                           │
 │      │                                                                │
 │      ▼                                                                │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ 1. 构建检索 Query                                               │  │
-│  │    - 当前用户输入                                               │  │
-│  │    - 累积状态摘要（已确认/已否定现象）                          │  │
+│  │ 1. Build Retrieval Query                                        │  │
+│  │    - Current user input                                         │  │
+│  │    - Accumulated state (confirmed/denied phenomena)             │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │      │                                                                │
 │      ▼                                                                │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ 2. RAG 检索 raw_tickets                                         │  │
-│  │    - 向量相似度检索 top-K 工单                                  │  │
-│  │    - 可选：LLM rerank 精排                                      │  │
+│  │ 2. RAG Retrieval raw_tickets                                    │  │
+│  │    - Vector similarity search top-K tickets                     │  │
+│  │    - Optional: LLM rerank                                       │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │      │                                                                │
 │      ▼                                                                │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ 3. LLM 推理与决策                                               │  │
-│  │    输入：                                                       │  │
-│  │      - 检索到的 raw_tickets（含 anomalies, root_cause, solution）│  │
-│  │      - 累积状态（已确认/已否定现象）                            │  │
-│  │      - 用户问题描述                                             │  │
-│  │    输出（结构化 JSON）：                                        │  │
+│  │ 3. LLM Reasoning & Decision                                     │  │
+│  │    Input:                                                       │  │
+│  │      - Retrieved raw_tickets (anomalies, root_cause, solution)  │  │
+│  │      - Accumulated state (confirmed/denied phenomena)           │  │
+│  │      - User problem description                                 │  │
+│  │    Output (structured JSON):                                    │  │
 │  │      - action: "recommend" | "diagnose"                         │  │
 │  │      - confidence: 0-1                                          │  │
-│  │      - content: 推荐现象列表 或 诊断报告                        │  │
+│  │      - content: Phenomena list or Diagnosis report              │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │      │                                                                │
 │      ▼                                                                │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ 4. 后处理 & Guardrails                                          │  │
-│  │    - 检查推荐现象是否已问过                                     │  │
-│  │    - 验证引用的工单确实存在                                     │  │
-│  │    - 更新累积状态                                               │  │
+│  │ 4. Post-processing & Guardrails                                 │  │
+│  │    - Check if recommended phenomena already asked               │  │
+│  │    - Verify cited tickets exist                                 │  │
+│  │    - Update accumulated state                                   │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │      │                                                                │
 │      ▼                                                                │
-│  渲染输出                                                             │
+│  Render Output                                                        │
 │                                                                       │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -420,15 +421,15 @@ def build_ticket_embedding(ticket: RawTicket) -> List[float]:
 **建议方案：分层截断**
 
 ```
-优先级从高到低：
+Priority from high to low:
 ┌─────────────────────────────────────────────────────────────────┐
-│ 1. 用户问题 + 累积状态（必须保留）                              │
+│ 1. User problem + Accumulated state (MUST keep)                 │
 ├─────────────────────────────────────────────────────────────────┤
-│ 2. Top-3 最相关工单（完整保留，含所有 anomalies）               │
+│ 2. Top-3 most relevant tickets (full content, all anomalies)    │
 ├─────────────────────────────────────────────────────────────────┤
-│ 3. Top-4~10 工单（只保留 description + root_cause）            │
+│ 3. Top-4~10 tickets (only description + root_cause)             │
 ├─────────────────────────────────────────────────────────────────┤
-│ 4. 其余工单（只列 ticket_id + 一句话描述）                      │
+│ 4. Remaining tickets (only ticket_id + one-line description)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
