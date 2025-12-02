@@ -4,6 +4,7 @@
     python -m dbdiag cli            # 启动交互式 CLI 诊断（图谱方法）
     python -m dbdiag cli --rar      # 启动交互式 CLI 诊断（检索方法，实验性）
     python -m dbdiag cli --hyb      # 启动交互式 CLI 诊断（混合方法，实验性）
+    python -m dbdiag web            # 启动 Web 控制台
     python -m dbdiag api            # 启动 FastAPI 服务
     python -m dbdiag init           # 初始化数据库
     python -m dbdiag import         # 导入工单数据
@@ -38,6 +39,41 @@ def interactive_cli(rar: bool, hyb: bool):
     """启动交互式命令行诊断（推荐）"""
     from dbdiag.cli.main import main as cli_main
     cli_main(use_rar=rar, use_hyb=hyb)
+
+
+@main.command("web")
+@click.option(
+    "--host",
+    default=None,
+    help="服务监听地址（默认从 config.yaml 读取，或 127.0.0.1）",
+)
+@click.option(
+    "--port",
+    default=None,
+    type=int,
+    help="服务监听端口（默认从 config.yaml 读取，或 8000）",
+)
+def web(host: str, port: int):
+    """启动 Web 控制台（推荐）"""
+    import uvicorn
+    from dbdiag.api.main import app
+    from dbdiag.utils.config import load_config
+
+    # 从配置文件读取默认值
+    try:
+        config = load_config()
+        default_host = config.web.host
+        default_port = config.web.port
+    except Exception:
+        default_host = "127.0.0.1"
+        default_port = 8000
+
+    # 命令行参数优先
+    final_host = host or default_host
+    final_port = port or default_port
+
+    click.echo(f"正在启动 Web 控制台: http://{final_host}:{final_port}")
+    uvicorn.run(app, host=final_host, port=final_port)
 
 
 @main.command("api")

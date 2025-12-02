@@ -104,7 +104,12 @@ dbdiag/
 │   ├── api/                      # FastAPI 接口
 │   │   ├── main.py
 │   │   ├── chat.py
-│   │   └── session.py
+│   │   ├── session.py
+│   │   └── websocket.py          # WebSocket 实时诊断
+│   ├── web/                      # Web 前端
+│   │   └── static/
+│   │       ├── index.html        # Web 控制台页面
+│   │       └── style.css         # CLI 风格样式
 │   ├── cli/                      # 命令行界面
 │   │   └── main.py               # CLI/GARCLI/HybCLI/RARCLI 类
 │   ├── core/                     # 核心逻辑
@@ -1238,7 +1243,92 @@ class HybCLI(GARCLI):
         )
 ```
 
-### 4.7 DAO 数据访问层
+### 4.7 Web 服务
+
+**文件**: `dbdiag/api/websocket.py`, `dbdiag/web/static/`
+
+**职责**: 提供基于 WebSocket 的 Web 控制台，支持浏览器访问诊断功能。
+
+#### 4.7.1 架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Web Console                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌───────────────┐       WebSocket        ┌───────────────────────────┐ │
+│  │    Browser    │◄────────────────────►│     FastAPI Server        │ │
+│  │  index.html   │   /ws/chat            │   WebChatSession          │ │
+│  │  + style.css  │                       │   + DiagnosisRenderer     │ │
+│  └───────────────┘                       └─────────────┬─────────────┘ │
+│                                                        │               │
+│                                          ┌─────────────▼─────────────┐ │
+│                                          │   GARDialogueManager      │ │
+│                                          │   (hybrid_mode=True/False)│ │
+│                                          └───────────────────────────┘ │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 4.7.2 WebChatSession
+
+每个 WebSocket 连接对应一个独立的 `WebChatSession` 实例：
+
+```python
+class WebChatSession:
+    def __init__(self, websocket: WebSocket, config: dict):
+        self.websocket = websocket
+        self.console = Console(record=True)  # 记录输出为 HTML
+        self.renderer = DiagnosisRenderer(self.console)
+        self.diagnosis_mode = config.get("web", {}).get("diagnosis_mode", "hyb")
+
+    async def handle_message(self, msg: dict) -> dict:
+        """处理消息，返回 HTML 响应"""
+
+    def render_welcome(self) -> str:
+        """渲染欢迎消息"""
+```
+
+#### 4.7.3 消息协议
+
+**客户端 → 服务端**：
+
+```json
+{"type": "message", "content": "查询变慢"}
+{"type": "command", "content": "/help"}
+```
+
+**服务端 → 客户端**：
+
+```json
+{"type": "output", "html": "<div>...</div>"}
+{"type": "close", "html": "<div>再见！</div>"}
+```
+
+#### 4.7.4 启动方式
+
+```bash
+# 启动 Web 控制台（推荐）
+python -m dbdiag web
+
+# 指定端口
+python -m dbdiag web --port 8080
+
+# 允许外部访问
+python -m dbdiag web --host 0.0.0.0 --port 8080
+```
+
+#### 4.7.5 配置
+
+```yaml
+# config.yaml
+web:
+  host: "127.0.0.1"      # 监听地址
+  port: 8000             # 监听端口
+  diagnosis_mode: hyb    # gar/hyb/rar
+```
+
+### 4.8 DAO 数据访问层
 
 **文件**: `dbdiag/dao/`
 
@@ -1745,6 +1835,15 @@ python -m dbdiag cli --rar
 
 # 启动 CLI 诊断（混合增强模式，实验性）
 python -m dbdiag cli --hyb
+
+# 启动 Web 控制台
+python -m dbdiag web
+
+# 启动 Web 控制台（指定端口）
+python -m dbdiag web --port 8080
+
+# 启动 Web 控制台（允许外部访问）
+python -m dbdiag web --host 0.0.0.0 --port 8080
 
 # 生成知识图谱可视化
 python -m dbdiag visualize --layout hierarchical
