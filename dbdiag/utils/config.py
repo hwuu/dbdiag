@@ -25,6 +25,11 @@ class EmbeddingModelConfig(BaseModel):
     dimension: int = 1024
 
 
+class WebConfig(BaseModel):
+    """Web 服务配置"""
+    diagnosis_mode: str = "hyb"  # gar/hyb/rar
+
+
 class RecommenderWeightsConfig(BaseModel):
     """推荐引擎权重配置"""
     popularity: float = 0.15
@@ -53,6 +58,7 @@ class Config(BaseModel):
     llm: LLMConfig
     embedding_model: EmbeddingModelConfig
     recommender: RecommenderConfig = RecommenderConfig()
+    web: WebConfig = WebConfig()
 
 
 def load_config(config_path: Optional[str] = None) -> Config:

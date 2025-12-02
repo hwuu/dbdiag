@@ -304,8 +304,9 @@ def _get_config() -> dict:
         _config = {}
         try:
             app_config = load_config()
-            if hasattr(app_config, "web"):
-                _config["web"] = app_config.web
+            _config["web"] = {
+                "diagnosis_mode": app_config.web.diagnosis_mode,
+            }
         except Exception:
             pass
     return _config
