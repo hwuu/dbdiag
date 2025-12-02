@@ -1,6 +1,10 @@
 """FastAPI 主应用"""
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from dbdiag.api.chat import router as chat_router
 from dbdiag.api.session import router as session_router
@@ -27,10 +31,18 @@ app.include_router(chat_router, prefix="/api", tags=["chat"])
 app.include_router(session_router, prefix="/api", tags=["session"])
 app.include_router(websocket_router, tags=["websocket"])
 
+# 静态文件服务
+static_dir = Path(__file__).parent.parent / "web" / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 
 @app.get("/")
 async def root():
-    """根路径"""
+    """根路径 - 返回 Web 控制台"""
+    index_file = static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
     return {
         "message": "数据库运维问题诊断助手 API",
         "version": "0.1.0",

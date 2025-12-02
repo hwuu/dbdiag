@@ -1,0 +1,143 @@
+/* DBDIAG Web Console 样式 */
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+#terminal {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+#output {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 20px;
+}
+
+.output-block {
+    margin-bottom: 10px;
+}
+
+/* Rich HTML 导出样式覆盖 */
+.output-block pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background: transparent !important;
+}
+
+.output-block code {
+    background: transparent !important;
+    font-family: inherit;
+}
+
+#input-line {
+    display: flex;
+    align-items: center;
+    padding: 10px 0;
+    border-top: 1px solid #333;
+    position: sticky;
+    bottom: 0;
+    background: #1e1e1e;
+}
+
+.prompt {
+    color: #569cd6;
+    font-weight: bold;
+    margin-right: 8px;
+    user-select: none;
+}
+
+#input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #d4d4d4;
+    font-family: inherit;
+    font-size: inherit;
+    outline: none;
+    caret-color: #569cd6;
+}
+
+#input::placeholder {
+    color: #666;
+}
+
+.user-input {
+    color: #569cd6;
+    margin: 15px 0 5px 0;
+    font-weight: bold;
+}
+
+.system-message {
+    color: #dcdcaa;
+    font-style: italic;
+    margin: 10px 0;
+}
+
+.error-message {
+    color: #f14c4c;
+    margin: 10px 0;
+}
+
+/* Rich 样式映射 */
+.bold, b, strong {
+    font-weight: bold;
+}
+
+.dim {
+    opacity: 0.7;
+}
+
+.italic, em, i {
+    font-style: italic;
+}
+
+/* 颜色类 */
+.green, [style*="color: #"] {
+    /* 保留 inline style */
+}
+
+/* 滚动条样式 */
+#output::-webkit-scrollbar {
+    width: 8px;
+}
+
+#output::-webkit-scrollbar-track {
+    background: #2d2d2d;
+}
+
+#output::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+#output::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+    #terminal {
+        padding: 10px;
+    }
+
+    body {
+        font-size: 13px;
+    }
+}
