@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from dbdiag.api.chat import router as chat_router
 from dbdiag.api.session import router as session_router
+from dbdiag.api.websocket import router as websocket_router
 
 # 创建 FastAPI 应用
 app = FastAPI(
@@ -24,6 +25,7 @@ app.add_middleware(
 # 注册路由
 app.include_router(chat_router, prefix="/api", tags=["chat"])
 app.include_router(session_router, prefix="/api", tags=["session"])
+app.include_router(websocket_router, tags=["websocket"])
 
 
 @app.get("/")
