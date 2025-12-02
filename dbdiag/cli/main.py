@@ -20,6 +20,7 @@ import rich.markdown
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
+from dbdiag.cli.rendering import DiagnosisRenderer
 
 
 # Monkey patch: 修复 Rich Markdown 标题默认居中的问题
@@ -166,21 +167,15 @@ class GARCLI(CLI):
     使用知识图谱进行诊断推理。
     """
 
-    LOGO = """
-██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗        ██████╗
-██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██╔════╝
-██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗██║  ███╗
-██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██║   ██║
-██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ╚██████╔╝
-╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝        ╚═════╝
-"""
-
     def __init__(self):
         """初始化"""
         super().__init__()
 
         from dbdiag.core.gar.dialogue_manager import GARDialogueManager
         from dbdiag.dao import RootCauseDAO
+
+        # 渲染器
+        self.renderer = DiagnosisRenderer(self.console)
 
         # 对话管理器
         self.dialogue_manager = GARDialogueManager(
@@ -229,7 +224,7 @@ class GARCLI(CLI):
 
     def _show_welcome(self) -> None:
         """显示欢迎信息"""
-        self.console.print(Text(self.LOGO.strip(), style="bold blue"))
+        self.console.print(Text(self.renderer.get_logo("gar"), style="bold blue"))
         self.console.print(Text("图谱增强推理方法", style="bold blue"))
 
     def _get_prompt(self) -> str:
@@ -242,16 +237,7 @@ class GARCLI(CLI):
 
     def _show_help(self) -> None:
         """显示帮助信息"""
-        help_text = """
-**可用命令：**
-- `/help` - 显示此帮助
-- `/status` - 查看当前诊断状态
-- `/reset` - 重新开始诊断
-- `/exit` - 退出程序
-
-直接输入诊断结果或观察到的现象即可继续诊断。
-        """
-        self.console.print(Panel(Markdown(help_text.strip()), title="帮助", title_align="left", border_style="blue"))
+        self.console.print(self.renderer.render_help("gar"))
 
     def _show_status(self) -> None:
         """显示当前状态"""
@@ -314,45 +300,13 @@ class GARCLI(CLI):
 
     def _render_footer(self) -> Group:
         """渲染底部状态栏（无边框）"""
-        # 第一行：轮次、推荐、确认、否认（横向）
-        stats_text = Text()
-        stats_text.append("轮次 ", style="dim")
-        stats_text.append(str(self.round_count), style="bold")
-        stats_text.append("  │  ", style="dim")
-        stats_text.append("推荐 ", style="dim")
-        stats_text.append(str(self.stats["recommended"]), style="bold")
-        stats_text.append("  │  ", style="dim")
-        stats_text.append("确认 ", style="dim")
-        stats_text.append(str(self.stats["confirmed"]), style="bold green")
-        stats_text.append("  │  ", style="dim")
-        stats_text.append("否认 ", style="dim")
-        stats_text.append(str(self.stats["denied"]), style="bold red")
-
-        content_parts = [stats_text]
-
-        # Top 3 假设
-        hypotheses = self.stats["top_hypotheses"]
-        if hypotheses:
-            content_parts.append(Text(""))  # 空行
-            for i, (conf, desc) in enumerate(hypotheses, 1):
-                bar_filled = int(conf * 10)
-                bar_empty = 10 - bar_filled
-
-                hyp_line = Text()
-                hyp_line.append(f"{i}. ", style="dim")
-                hyp_line.append("█" * bar_filled, style="green")
-                hyp_line.append("░" * bar_empty, style="dim")
-                hyp_line.append(f" {conf:.0%} ", style="bold")
-
-                # 截断描述
-                if len(desc) > 35:
-                    desc = desc[:35] + "..."
-                hyp_line.append(desc)
-                content_parts.append(hyp_line)
-        else:
-            content_parts.append(Text("暂无假设", style="dim"))
-
-        return Group(*content_parts)
+        return self.renderer.render_status_bar(
+            round_count=self.round_count,
+            recommended=self.stats["recommended"],
+            confirmed=self.stats["confirmed"],
+            denied=self.stats["denied"],
+            hypotheses=self.stats["top_hypotheses"],
+        )
 
     def _render_phenomenon_recommendation(self, response: dict):
         """渲染现象推荐"""
@@ -411,44 +365,13 @@ class GARCLI(CLI):
     def _render_root_cause_confirmation(self, response: dict):
         """渲染根因确认"""
         root_cause = response.get("root_cause", "未知")
-        confidence = response.get("confidence", 0.0)
         diagnosis_summary = response.get("diagnosis_summary", "")
         citations = response.get("citations", [])
 
-        # 构建 Panel 内容
-        content_parts = []
-
-        # 根因和置信度
-        info = Text()
-        info.append("根因: ", style="bold")
-        info.append(f"{root_cause}\n", style="green bold")
-        content_parts.append(info)
-
-        # 诊断报告（Markdown 渲染）
-        if diagnosis_summary:
-            md = Markdown(diagnosis_summary, justify="left")
-            content_parts.append(md)
-            content_parts.append(Text(""))
-
-        # 引用工单
-        if citations:
-            content_parts.append(Text("引用工单", style="bold"))
-            content_parts.append(Text(""))
-            for i, citation in enumerate(citations, 1):
-                cite_text = Text()
-                cite_text.append(f"[{i}] ", style="dim")
-                cite_text.append(f"{citation['ticket_id']}", style="bold cyan")
-                cite_text.append(f": {citation['description']}")
-                content_parts.append(cite_text)
-
-        # 使用 Panel 包装，最大宽度 100
-        panel = Panel(
-            Group(*content_parts),
-            title="✓ 根因已定位",
-            title_align="left",
-            border_style="green",
-            width=min(100, self.console.width),
-            padding=(1, 2),
+        panel = self.renderer.render_diagnosis_result(
+            root_cause=root_cause,
+            diagnosis_summary=diagnosis_summary,
+            citations=citations,
         )
         self._print_indented(Text(""))
         self._print_indented(panel)
@@ -482,15 +405,6 @@ class HybCLI(GARCLI):
     - LLM 增强推荐解释
     """
 
-    LOGO = """
-██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗       ██╗  ██╗
-██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██║  ██║
-██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗███████║
-██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██╔══██║
-██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ██║  ██║
-╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝       ╚═╝  ╚═╝
-"""
-
     def __init__(self):
         """初始化"""
         # 调用基类初始化（会创建服务和 dialogue_manager）
@@ -507,7 +421,7 @@ class HybCLI(GARCLI):
 
     def _show_welcome(self) -> None:
         """显示欢迎信息"""
-        self.console.print(Text(self.LOGO.strip(), style="bold green"))
+        self.console.print(Text(self.renderer.get_logo("hyb"), style="bold green"))
         self.console.print(Text("混合增强推理方法（实验性）", style="bold green"))
 
     def _get_prompt(self) -> str:
@@ -521,20 +435,14 @@ class RARCLI(CLI):
     使用 RAG + LLM 端到端推理。
     """
 
-    LOGO = """
-██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗       ██████╗
-██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██╔══██╗
-██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗██████╔╝
-██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██╔══██╗
-██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ██║  ██║
-╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝       ╚═╝  ╚═╝
-"""
-
     def __init__(self):
         """初始化"""
         super().__init__()
 
         from dbdiag.core.rar.dialogue_manager import RARDialogueManager
+
+        # 渲染器
+        self.renderer = DiagnosisRenderer(self.console)
 
         # RAR 对话管理器
         self.dialogue_manager = RARDialogueManager(
@@ -553,7 +461,7 @@ class RARCLI(CLI):
 
     def _show_welcome(self) -> None:
         """显示欢迎信息"""
-        self.console.print(Text(self.LOGO.strip(), style="bold magenta"))
+        self.console.print(Text(self.renderer.get_logo("rar"), style="bold magenta"))
         self.console.print(Text("检索增强推理方法（实验性）", style="bold magenta"))
 
     def _get_prompt(self) -> str:
@@ -566,15 +474,7 @@ class RARCLI(CLI):
 
     def _show_help(self) -> None:
         """显示帮助信息"""
-        help_text = """
-**RAR 模式可用命令：**
-- `/help` - 显示此帮助
-- `/reset` - 重新开始诊断
-- `/exit` - 退出程序
-
-直接输入问题描述或检查结果即可继续诊断。
-        """
-        self.console.print(Panel(Markdown(help_text.strip()), title="帮助", title_align="left", border_style="blue"))
+        self.console.print(self.renderer.render_help("rar"))
 
     def _show_status(self) -> None:
         """显示当前状态"""
