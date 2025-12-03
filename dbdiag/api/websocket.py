@@ -3,7 +3,10 @@
 提供基于 WebSocket 的实时诊断交互。
 每个 WebSocket 连接拥有独立的会话状态。
 """
+import io
+import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +20,10 @@ from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
 from dbdiag.cli.rendering import DiagnosisRenderer
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
 from dbdiag.dao import RootCauseDAO
 
 
@@ -60,12 +67,13 @@ class WebChatSession:
         self.websocket = websocket
         self.config = config
 
-        # 使用 record=True 捕获输出为 HTML
+        # 使用 record=True 捕获输出为 HTML，file=io.StringIO() 禁止输出到 stdout
         self.console = Console(
             record=True,
             force_terminal=True,
             width=150,
             theme=self._DARK_THEME,
+            file=io.StringIO(),  # 静默输出
         )
         self.renderer = DiagnosisRenderer(self.console)
 
@@ -357,6 +365,10 @@ async def websocket_chat(websocket: WebSocket):
     """
     await websocket.accept()
 
+    # 获取客户端 IP
+    client_host = websocket.client.host if websocket.client else "unknown"
+    logger.info(f"[{client_host}] WebSocket 连接建立")
+
     config = _get_config()
     session = WebChatSession(websocket, config)
 
@@ -371,7 +383,16 @@ async def websocket_chat(websocket: WebSocket):
         while True:
             # 接收消息
             msg = await websocket.receive_json()
+            content = msg.get("content", "")
+
+            # 记录输入
+            logger.info(f"[{client_host}] <- input: {len(content)} chars")
+
             response = await session.handle_message(msg)
+
+            # 记录输出
+            html_len = len(response.get("html", ""))
+            logger.info(f"[{client_host}] -> output: {html_len} chars")
 
             # 发送响应
             await websocket.send_json(response)
@@ -381,6 +402,6 @@ async def websocket_chat(websocket: WebSocket):
                 break
 
     except WebSocketDisconnect:
-        pass  # 客户端断开
+        logger.info(f"[{client_host}] WebSocket 连接断开")
     finally:
         session.cleanup()

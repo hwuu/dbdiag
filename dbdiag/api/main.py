@@ -1,4 +1,5 @@
 """FastAPI 主应用"""
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,6 +10,13 @@ from fastapi.responses import FileResponse
 from dbdiag.api.chat import router as chat_router
 from dbdiag.api.session import router as session_router
 from dbdiag.api.websocket import router as websocket_router
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 # 创建 FastAPI 应用
 app = FastAPI(
