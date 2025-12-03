@@ -130,7 +130,15 @@ python -m dbdiag cli --hyb
 | RAR | RAG + LLM 端到端 | 灵活，无需预建索引 |
 | Hyb | GAR + 语义检索 + LLM 反馈理解 | 自然语言交互，动态发现线索 |
 
-#### 方式 2: FastAPI 服务
+#### 方式 2: Web 控制台 (推荐)
+
+```bash
+python -m dbdiag web
+```
+
+访问 http://localhost:8000 打开 Web 控制台。
+
+#### 方式 3: FastAPI 服务
 
 ```bash
 python -m dbdiag api
@@ -220,22 +228,25 @@ python -m pytest tests/unit/ -v
 python -m dbdiag --help
 
 # 初始化数据库（仅创建表结构）
-python -m dbdiag init
+python -m dbdiag init --db <数据库路径>
 
 # 导入工单数据
-python -m dbdiag import --data <json文件路径>
+python -m dbdiag import --data <json文件路径> --db <数据库路径>
 
 # 重建向量索引
-python -m dbdiag rebuild-index
+python -m dbdiag rebuild-index --db <数据库路径>
 
 # 启动命令行交互诊断（GAR 模式，默认）
-python -m dbdiag cli
+python -m dbdiag cli --db <数据库路径>
 
 # 启动命令行交互诊断（RAR 模式，实验性）
-python -m dbdiag cli --rar
+python -m dbdiag cli --rar --db <数据库路径>
 
 # 启动命令行交互诊断（Hyb 模式，实验性）
-python -m dbdiag cli --hyb
+python -m dbdiag cli --hyb --db <数据库路径>
+
+# 启动 Web 控制台
+python -m dbdiag web --host 0.0.0.0 --port 8000 --db <数据库路径>
 
 # 启动 FastAPI 服务
 python -m dbdiag api --host 0.0.0.0 --port 8000
@@ -243,6 +254,64 @@ python -m dbdiag api --host 0.0.0.0 --port 8000
 # 生成知识图谱可视化
 python -m dbdiag visualize --layout hierarchical --open
 ```
+
+## 🐳 Docker 部署
+
+### 构建镜像
+
+```bash
+docker build -t dbdiag .
+```
+
+### 运行示例
+
+假设：
+- 配置文件在 `/a/config.yaml`
+- 原始工单数据在 `/b/raw_tickets.json`
+- 数据库存放在 `/c/tickets.db`
+
+```bash
+# 1. 初始化数据库
+docker run --rm \
+  -v /a/config.yaml:/app/config.yaml \
+  -v /c:/c \
+  dbdiag python -m dbdiag init --db /c/tickets.db
+
+# 2. 导入数据
+docker run --rm \
+  -v /a/config.yaml:/app/config.yaml \
+  -v /b/raw_tickets.json:/app/raw_tickets.json \
+  -v /c:/c \
+  dbdiag python -m dbdiag import --data /app/raw_tickets.json --db /c/tickets.db
+
+# 3. 重建索引
+docker run --rm \
+  -v /a/config.yaml:/app/config.yaml \
+  -v /c:/c \
+  dbdiag python -m dbdiag rebuild-index --db /c/tickets.db
+
+# 4. 启动 CLI
+docker run -it --rm \
+  -v /a/config.yaml:/app/config.yaml \
+  -v /c:/c \
+  dbdiag python -m dbdiag cli --db /c/tickets.db
+
+# 5. 启动 Web 服务
+docker run -d -p 8000:8000 \
+  -v /a/config.yaml:/app/config.yaml \
+  -v /c:/c \
+  dbdiag python -m dbdiag web --host 0.0.0.0 --db /c/tickets.db
+```
+
+### 环境变量
+
+支持以下环境变量（命令行参数优先）：
+
+| 变量 | 说明 |
+|------|------|
+| `CONFIG_PATH` | 配置文件路径 |
+| `DB_PATH` | 数据库文件完整路径 |
+| `DATA_DIR` | 数据目录路径（数据库默认为 `DATA_DIR/tickets.db`） |
 
 ## 📄 许可
 

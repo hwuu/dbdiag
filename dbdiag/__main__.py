@@ -35,10 +35,15 @@ def main():
     is_flag=True,
     help="使用混合增强推理方法（实验性）",
 )
-def interactive_cli(rar: bool, hyb: bool):
+@click.option(
+    "--db",
+    default=None,
+    help="数据库文件路径（默认: data/tickets.db 或 DATA_DIR 环境变量）",
+)
+def interactive_cli(rar: bool, hyb: bool, db: str):
     """启动交互式命令行诊断（推荐）"""
     from dbdiag.cli.main import main as cli_main
-    cli_main(use_rar=rar, use_hyb=hyb)
+    cli_main(use_rar=rar, use_hyb=hyb, db_path=db)
 
 
 @main.command("web")
@@ -53,11 +58,24 @@ def interactive_cli(rar: bool, hyb: bool):
     type=int,
     help="服务监听端口（默认从 config.yaml 读取，或 8000）",
 )
-def web(host: str, port: int):
+@click.option(
+    "--db",
+    default=None,
+    help="数据库文件路径（默认: data/tickets.db 或 DATA_DIR 环境变量）",
+)
+def web(host: str, port: int, db: str):
     """启动 Web 控制台（推荐）"""
+    import os
     import uvicorn
-    from dbdiag.api.main import app
     from dbdiag.utils.config import load_config
+
+    # 如果指定了 db 参数，设置环境变量供后续模块使用
+    if db:
+        # 设置 DB_PATH 环境变量
+        os.environ["DB_PATH"] = db
+
+    # 延迟导入 app，确保环境变量已设置
+    from dbdiag.api.main import app
 
     # 从配置文件读取默认值
     try:

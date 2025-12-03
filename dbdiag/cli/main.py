@@ -697,13 +697,20 @@ class RARCLI(CLI):
             self.dialogue_manager.deny_observation(message)
 
 
-def main(use_rar: bool = False, use_hyb: bool = False):
+def main(use_rar: bool = False, use_hyb: bool = False, db_path: str = None):
     """入口
 
     Args:
         use_rar: 是否使用 RAR 方法
         use_hyb: 是否使用混合增强方法
+        db_path: 数据库路径，如果指定则覆盖默认路径
     """
+    import os
+
+    # 如果指定了 db_path，设置环境变量
+    if db_path:
+        os.environ["DB_PATH"] = db_path
+
     if use_hyb:
         cli = HybCLI()
     elif use_rar:

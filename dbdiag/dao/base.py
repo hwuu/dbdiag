@@ -12,11 +12,22 @@ from contextlib import contextmanager
 def get_default_db_path() -> str:
     """获取默认数据库路径
 
-    优先从环境变量 DATA_DIR 读取，否则使用项目根目录的 data/tickets.db
+    优先级：
+    1. 环境变量 DB_PATH（完整路径）
+    2. 环境变量 DATA_DIR + tickets.db
+    3. 项目根目录的 data/tickets.db
     """
+    # 优先使用 DB_PATH（完整路径）
+    db_path = os.environ.get("DB_PATH")
+    if db_path:
+        return db_path
+
+    # 其次使用 DATA_DIR
     data_dir = os.environ.get("DATA_DIR")
     if data_dir:
         return str(Path(data_dir) / "tickets.db")
+
+    # 默认项目根目录
     project_root = Path(__file__).parent.parent.parent
     return str(project_root / "data" / "tickets.db")
 
