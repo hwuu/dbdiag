@@ -8,7 +8,6 @@
     python -m dbdiag cli --hyb # 混合增强推理方法（实验性）
 """
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Optional
 
 from rich.console import Console, Group
@@ -21,6 +20,7 @@ from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
 from dbdiag.cli.rendering import DiagnosisRenderer
+from dbdiag.dao.base import get_default_db_path
 
 
 # Monkey patch: 修复 Rich Markdown 标题默认居中的问题
@@ -44,7 +44,7 @@ class CLI(ABC):
         """初始化基础组件"""
         self.console = Console()
         self.config = load_config()
-        self.db_path = str(Path("data") / "tickets.db")
+        self.db_path = get_default_db_path()
 
         # 服务（子类可能会用到）
         self.llm_service = LLMService(self.config)

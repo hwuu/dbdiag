@@ -68,11 +68,17 @@ def load_config(config_path: Optional[str] = None) -> Config:
     加载配置文件
 
     Args:
-        config_path: 配置文件路径，默认为项目根目录的 config.yaml
+        config_path: 配置文件路径，默认按以下顺序查找：
+                     1. 环境变量 CONFIG_PATH
+                     2. 项目根目录的 config.yaml
 
     Returns:
         Config: 配置对象
     """
+    if config_path is None:
+        # 优先从环境变量读取
+        config_path = os.environ.get("CONFIG_PATH")
+
     if config_path is None:
         # 默认使用项目根目录的 config.yaml
         project_root = Path(__file__).parent.parent.parent

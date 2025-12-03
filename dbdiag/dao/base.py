@@ -2,10 +2,23 @@
 
 提供数据库连接管理的基础功能
 """
+import os
 import sqlite3
 from typing import Optional
 from pathlib import Path
 from contextlib import contextmanager
+
+
+def get_default_db_path() -> str:
+    """获取默认数据库路径
+
+    优先从环境变量 DATA_DIR 读取，否则使用项目根目录的 data/tickets.db
+    """
+    data_dir = os.environ.get("DATA_DIR")
+    if data_dir:
+        return str(Path(data_dir) / "tickets.db")
+    project_root = Path(__file__).parent.parent.parent
+    return str(project_root / "data" / "tickets.db")
 
 
 class BaseDAO:
@@ -19,11 +32,10 @@ class BaseDAO:
         初始化 DAO
 
         Args:
-            db_path: 数据库路径，如果为 None 则使用默认路径
+            db_path: 数据库路径，如果为 None 则使用默认路径（优先环境变量 DATA_DIR）
         """
         if db_path is None:
-            project_root = Path(__file__).parent.parent.parent
-            db_path = str(project_root / "data" / "tickets.db")
+            db_path = get_default_db_path()
 
         self.db_path = db_path
 

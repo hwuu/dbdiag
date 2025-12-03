@@ -20,11 +20,11 @@ from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
 from dbdiag.cli.rendering import DiagnosisRenderer
+from dbdiag.dao import RootCauseDAO
+from dbdiag.dao.base import get_default_db_path
 
 # 配置日志
 logger = logging.getLogger(__name__)
-
-from dbdiag.dao import RootCauseDAO
 
 
 # Monkey patch: 修复 Rich Markdown 标题默认居中的问题
@@ -78,7 +78,7 @@ class WebChatSession:
         self.renderer = DiagnosisRenderer(self.console)
 
         # 数据库路径
-        self.db_path = str(Path("data") / "tickets.db")
+        self.db_path = get_default_db_path()
 
         # 服务（延迟初始化）
         self._llm_service: Optional[LLMService] = None

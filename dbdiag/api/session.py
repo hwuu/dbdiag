@@ -1,11 +1,11 @@
 """会话管理 API 接口"""
 from fastapi import APIRouter, HTTPException
-from pathlib import Path
 
 from dbdiag.core.gar.dialogue_manager import GARDialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
+from dbdiag.dao.base import get_default_db_path
 
 # 创建路由
 router = APIRouter()
@@ -16,7 +16,7 @@ llm_service = LLMService(config)
 embedding_service = EmbeddingService(config)
 
 # 初始化对话管理器 (GAR)
-db_path = str(Path("data") / "tickets.db")
+db_path = get_default_db_path()
 dialogue_manager = GARDialogueManager(db_path, llm_service, embedding_service)
 
 
