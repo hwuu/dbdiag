@@ -11,8 +11,8 @@
         <div id="output"></div>
         <div id="input-line">
             <span class="prompt">&gt; </span>
-            <input type="text" id="input" autofocus
-                   placeholder="输入问题描述开始诊断...">
+            <textarea id="input" rows="1" autofocus autocomplete="off"
+                      placeholder="输入问题描述开始诊断..."></textarea>
         </div>
     </div>
 
@@ -26,6 +26,23 @@
 
         // 连接状态
         let connected = false;
+
+        // 输入历史管理
+        // history: [...已发送的历史]，index 0 是最新
+        // draft: Escape 保存的草稿
+        // 状态：-2 = 空白，-1 = 草稿，0+ = 历史索引
+        const inputHistory = [];
+        let historyIndex = -2;  // -2=空白, -1=草稿, 0+=历史
+        let draft = '';
+
+        // 调整 textarea 高度
+        function adjustHeight() {
+            input.style.height = 'auto';
+            const lineHeight = parseInt(getComputedStyle(input).lineHeight) || 20;
+            const maxHeight = lineHeight * 10;  // 最多 10 行
+            const newHeight = Math.min(input.scrollHeight, maxHeight);
+            input.style.height = newHeight + 'px';
+        }
 
         ws.onopen = () => {
             connected = true;
@@ -80,15 +97,38 @@
             }
         };
 
+        // 输入框内容变化时调整高度
+        input.addEventListener('input', adjustHeight);
+
         // 输入处理
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && input.value.trim()) {
+            // Ctrl+Enter: 插入换行
+            if (e.key === 'Enter' && e.ctrlKey) {
+                e.preventDefault();
+                const start = input.selectionStart;
+                const end = input.selectionEnd;
+                const value = input.value;
+                input.value = value.substring(0, start) + '\n' + value.substring(end);
+                input.selectionStart = input.selectionEnd = start + 1;
+                adjustHeight();
+                return;
+            }
+
+            // Enter: 发送消息
+            if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+                e.preventDefault();
                 const content = input.value.trim();
+                if (!content) return;
 
                 if (!connected) {
                     output.innerHTML += '<div class="error-message">未连接到服务器，请刷新页面。</div>';
                     return;
                 }
+
+                // 保存到历史
+                inputHistory.unshift(content);
+                historyIndex = -2;  // 回到空白状态
+                draft = '';  // 清空草稿
 
                 // 回显用户输入
                 const echoDiv = document.createElement('div');
@@ -103,11 +143,84 @@
                     ws.send(JSON.stringify({type: 'message', content: content}));
                 }
 
-                // 清空输入框
+                // 清空输入框并重置高度
                 input.value = '';
+                adjustHeight();
 
                 // 滚动到底部
                 output.scrollTop = output.scrollHeight;
+                return;
+            }
+
+            // Page Up: 往上翻（空白 → 草稿 → 历史）
+            if (e.key === 'PageUp') {
+                e.preventDefault();
+
+                if (historyIndex === -2) {
+                    // 当前是空白，先看有没有草稿
+                    if (draft) {
+                        historyIndex = -1;
+                        input.value = draft;
+                    } else if (inputHistory.length > 0) {
+                        // 没草稿，直接去历史
+                        historyIndex = 0;
+                        input.value = inputHistory[0];
+                    }
+                } else if (historyIndex === -1) {
+                    // 当前是草稿，往上去历史
+                    if (inputHistory.length > 0) {
+                        historyIndex = 0;
+                        input.value = inputHistory[0];
+                    }
+                } else if (historyIndex < inputHistory.length - 1) {
+                    // 当前在历史中，继续往上
+                    historyIndex++;
+                    input.value = inputHistory[historyIndex];
+                }
+                adjustHeight();
+                return;
+            }
+
+            // Page Down: 往下翻（历史 → 草稿 → 空白）
+            if (e.key === 'PageDown') {
+                e.preventDefault();
+
+                if (historyIndex >= 0) {
+                    // 当前在历史中
+                    historyIndex--;
+                    if (historyIndex === -1) {
+                        // 回到草稿
+                        input.value = draft;
+                    } else if (historyIndex === -2) {
+                        // 没草稿，回到空白
+                        input.value = '';
+                    } else {
+                        input.value = inputHistory[historyIndex];
+                    }
+                    // 如果没草稿，从 -1 跳到 -2
+                    if (historyIndex === -1 && !draft) {
+                        historyIndex = -2;
+                        input.value = '';
+                    }
+                } else if (historyIndex === -1) {
+                    // 当前是草稿，往下到空白
+                    historyIndex = -2;
+                    input.value = '';
+                }
+                adjustHeight();
+                return;
+            }
+
+            // Escape: 清空输入框，保存为草稿
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (input.value.trim()) {
+                    draft = input.value;
+                }
+                input.value = '';
+                historyIndex = -2;  // 回到空白状态
+                adjustHeight();
+                return;
             }
         });
 
