@@ -53,8 +53,8 @@ class WebChatSession:
 
     # 暗色主题
     _DARK_THEME = Theme({
-        "dim": "#888888",
-        "default": "#d4d4d4",
+        "dim": "#a0a0a0",
+        "default": "#e8e8e8",
     })
 
     def __init__(self, websocket: WebSocket, config: dict):
@@ -71,7 +71,7 @@ class WebChatSession:
         self.console = Console(
             record=True,
             force_terminal=True,
-            width=150,
+            width=10000,  # 不限制宽度，由前端 CSS 控制换行
             theme=self._DARK_THEME,
             file=io.StringIO(),  # 静默输出
         )
