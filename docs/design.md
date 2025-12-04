@@ -765,7 +765,84 @@ def discrimination_power(p):
         return 0.1  # 都不相关
 ```
 
-#### 4.3.4 决策逻辑
+#### 4.3.4 分阶段多样性约束
+
+为了提高诊断效率，推荐引擎在不同诊断阶段采用不同的多样性策略：
+
+**设计目标**：
+- **早期阶段**：用户想"尽快排除不可能的"根因，需要推荐覆盖不同根因的现象
+- **晚期阶段**：用户想"尽快确认可能的"根因，需要聚焦 top 假设的现象
+
+**三阶段策略**：
+
+| 阶段 | 判断条件 | 每根因最多现象数 | 目的 |
+|------|----------|------------------|------|
+| 早期 | confirmed < 3 | 1 | 快速探索，排除不可能的根因 |
+| 中期 | confirmed ≥ 3 | 2 | 平衡探索与聚焦 |
+| 晚期 | top_confidence ≥ 80% | 无限制 | 聚焦确认 top 假设 |
+
+**配置项**（`config.yaml`）：
+
+```yaml
+recommender:
+  early_max_per_root_cause: 1    # 早期每根因最多现象数
+  mid_max_per_root_cause: 2      # 中期每根因最多现象数
+  mid_confirmed_threshold: 3     # 进入中期的确认数阈值
+```
+
+**算法实现**（贪心选择）：
+
+```python
+def apply_diversity_constraint(scored_phenomena, session, max_count):
+    # 判断阶段
+    confirmed_count = len(session.confirmed_phenomena)
+    top_confidence = session.active_hypotheses[0].confidence
+
+    # 晚期：不限制
+    if top_confidence >= high_confidence_threshold:
+        return scored_phenomena[:max_count]
+
+    # 早期 vs 中期
+    if confirmed_count < mid_confirmed_threshold:
+        max_per_root_cause = early_max_per_root_cause  # 1
+    else:
+        max_per_root_cause = mid_max_per_root_cause    # 2
+
+    # 贪心选择：按得分从高到低，每个根因最多 max_per_root_cause 个
+    result = []
+    root_cause_count = {}
+
+    for item in scored_phenomena:
+        if len(result) >= max_count:
+            break
+
+        related_root_causes = get_related_root_causes(item)
+        can_add = all(
+            root_cause_count.get(rc, 0) < max_per_root_cause
+            for rc in related_root_causes
+        )
+
+        if can_add:
+            result.append(item)
+            for rc in related_root_causes:
+                root_cause_count[rc] = root_cause_count.get(rc, 0) + 1
+
+    return result
+```
+
+**效果示例**：
+
+```
+早期阶段（confirmed=0）：
+  原始排序: P1(RC1), P2(RC1), P3(RC1), P4(RC2), P5(RC2)
+  多样性后: P1(RC1), P4(RC2)  # 每根因最多1个，覆盖2个不同根因
+
+中期阶段（confirmed=3）：
+  原始排序: P1(RC1), P2(RC1), P3(RC1), P4(RC2)
+  多样性后: P1(RC1), P2(RC1), P4(RC2)  # 每根因最多2个
+```
+
+#### 4.3.5 决策逻辑
 
 ```python
 def recommend_next_action(session):
@@ -790,10 +867,10 @@ def recommend_next_action(session):
     return ask_for_more_info()
 ```
 
-#### 4.3.5 完整推荐流程伪代码
+#### 4.3.6 完整推荐流程伪代码
 
 ```python
-def recommend_phenomena(session, n=3):
+def recommend_phenomena(session, n=5):
     # 1. 从活跃假设获取相关根因（已在 hypothesis_tracker 中检索过）
     relevant_root_causes = {h.root_cause_id for h in session.active_hypotheses}
 
@@ -806,10 +883,12 @@ def recommend_phenomena(session, n=3):
     candidates -= confirmed_ids
     candidates -= denied_ids
 
-    # 4. 计算得分，返回 top-n
+    # 4. 计算得分并排序
     scored = [(p, score(p)) for p in candidates]
     scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:n]
+
+    # 5. 应用分阶段多样性约束
+    return apply_diversity_constraint(scored, session, n)
 ```
 
 ### 4.4 响应生成器 (ResponseGenerator)
@@ -1816,6 +1895,33 @@ embedding_model:
   api_base: "http://localhost:11435/v1"
   api_key: "sk-xxx"
   model: "Qwen/Qwen3-Embedding-4B"
+
+# 推荐引擎配置
+recommender:
+  # 权重
+  weights:
+    popularity: 0.15
+    specificity: 0.20
+    hypothesis_priority: 0.40
+    information_gain: 0.25
+  # 检索相关
+  retrieval_top_k: 5           # 检索 top-m 现象
+  recommend_top_n: 5           # 推荐 top-n 现象
+  # 假设追踪
+  hypothesis_top_k: 5          # 追踪 top-k 假设
+  # 置信度阈值
+  high_confidence_threshold: 0.80
+  medium_confidence_threshold: 0.50
+  # 多样性约束（分阶段策略）
+  early_max_per_root_cause: 1  # 早期每根因最多现象数
+  mid_max_per_root_cause: 2    # 中期每根因最多现象数
+  mid_confirmed_threshold: 3   # 进入中期的确认数阈值
+
+# Web 服务配置
+web:
+  host: "127.0.0.1"
+  port: 8000
+  diagnosis_mode: hyb          # gar/hyb/rar
 ```
 
 ### C. CLI 命令

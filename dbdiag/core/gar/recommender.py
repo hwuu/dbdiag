@@ -171,9 +171,83 @@ class PhenomenonRecommendationEngine:
                 "related_hypotheses": related_hypotheses,
             })
 
-        # 5. 排序并返回 top-n
+        # 5. 排序
         scored_phenomena.sort(key=lambda x: x["score"], reverse=True)
-        return scored_phenomena[:max_count]
+
+        # 6. 分阶段多样性约束
+        return self._apply_diversity_constraint(scored_phenomena, session, max_count)
+
+    def _apply_diversity_constraint(
+        self,
+        scored_phenomena: List[Dict],
+        session: SessionState,
+        max_count: int,
+    ) -> List[Dict]:
+        """
+        应用分阶段多样性约束
+
+        策略：
+        - 早期（confirmed < mid_confirmed_threshold）：每根因最多 early_max_per_root_cause 个现象
+        - 中期（否则）：每根因最多 mid_max_per_root_cause 个现象
+        - 晚期（top_confidence >= high_confidence_threshold）：无限制，聚焦 top 假设
+
+        Args:
+            scored_phenomena: 已按得分排序的现象列表
+            session: 会话状态
+            max_count: 最大返回数量
+
+        Returns:
+            应用多样性约束后的现象列表
+        """
+        if not scored_phenomena:
+            return []
+
+        # 判断当前阶段
+        confirmed_count = len(session.confirmed_phenomena)
+        top_confidence = session.active_hypotheses[0].confidence if session.active_hypotheses else 0.0
+
+        # 晚期：置信度已经很高，聚焦 top 假设，不需要多样性
+        if top_confidence >= self.config.high_confidence_threshold:
+            return scored_phenomena[:max_count]
+
+        # 早期 vs 中期
+        if confirmed_count < self.config.mid_confirmed_threshold:
+            max_per_root_cause = self.config.early_max_per_root_cause
+        else:
+            max_per_root_cause = self.config.mid_max_per_root_cause
+
+        # 贪心选择：按得分从高到低，每个根因最多 max_per_root_cause 个
+        result = []
+        root_cause_count: Dict[str, int] = {}
+
+        for item in scored_phenomena:
+            if len(result) >= max_count:
+                break
+
+            # 获取该现象关联的根因
+            related_hypotheses = item.get("related_hypotheses", [])
+            if not related_hypotheses:
+                # 没有关联假设，直接加入
+                result.append(item)
+                continue
+
+            # 检查是否超出限制
+            can_add = True
+            for hyp in related_hypotheses:
+                root_cause_id = hyp["root_cause"]
+                current_count = root_cause_count.get(root_cause_id, 0)
+                if current_count >= max_per_root_cause:
+                    can_add = False
+                    break
+
+            if can_add:
+                result.append(item)
+                # 更新计数
+                for hyp in related_hypotheses:
+                    root_cause_id = hyp["root_cause"]
+                    root_cause_count[root_cause_id] = root_cause_count.get(root_cause_id, 0) + 1
+
+        return result
 
     def _calculate_phenomenon_score(
         self,

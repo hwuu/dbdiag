@@ -55,6 +55,10 @@ class RecommenderConfig(BaseModel):
     # information_gain 子权重
     confirmation_gain_weight: float = 0.6
     discrimination_power_weight: float = 0.4
+    # 多样性约束（分阶段策略）
+    early_max_per_root_cause: int = 1      # 早期每根因最多现象数
+    mid_max_per_root_cause: int = 2        # 中期每根因最多现象数
+    mid_confirmed_threshold: int = 3       # 进入中期的确认数阈值
 
 
 class Config(BaseModel):
