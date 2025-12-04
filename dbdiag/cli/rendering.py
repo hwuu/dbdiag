@@ -106,10 +106,10 @@ class DiagnosisRenderer:
 
         content_parts = [stats_text]
 
-        # Top 3 假设
+        # Top 假设（由调用方决定数量）
         if hypotheses:
             content_parts.append(Text(""))  # 空行
-            for i, (conf, desc) in enumerate(hypotheses[:3], 1):
+            for i, (conf, desc) in enumerate(hypotheses, 1):
                 bar = self._render_confidence_bar(i, conf, desc)
                 content_parts.append(bar)
         else:
@@ -124,7 +124,7 @@ class DiagnosisRenderer:
         """渲染现象推荐
 
         Args:
-            phenomena_with_reasons: [{"phenomenon": Phenomenon, "reason": str}, ...]
+            phenomena_with_reasons: [{"phenomenon": Phenomenon, "reason": str, "score_details": dict}, ...]
 
         Returns:
             Rich Group 对象
@@ -142,11 +142,28 @@ class DiagnosisRenderer:
         for i, item in enumerate(phenomena_with_reasons, 1):
             phenomenon = item["phenomenon"]
             reason = item.get("reason", "")
+            score_details = item.get("score_details", {})
 
             # 标题行
             title = Text()
             title.append(f"[{i}] ", style="bold yellow")
-            title.append(phenomenon.phenomenon_id, style="bold cyan")
+            title.append(phenomenon.phenomenon_id, style="bold yellow")
+
+            # 得分详情
+            if score_details:
+                w = score_details.get("weights", {})
+                v = score_details.get("values", {})
+                score = score_details.get("score", 0)
+                score_text = Text()
+                score_text.append(" (", style="dim")
+                score_text.append(f"{score:.3f}[score] = ", style="dim")
+                score_text.append(f"{w.get('popularity', 0)} * {v.get('popularity', 0):.2f}[pop]", style="dim")
+                score_text.append(f" + {w.get('specificity', 0)} * {v.get('specificity', 0):.2f}[spec]", style="dim")
+                score_text.append(f" + {w.get('hypothesis_priority', 0)} * {v.get('hypothesis_priority', 0):.2f}[hyp]", style="dim")
+                score_text.append(f" + {w.get('information_gain', 0)} * {v.get('information_gain', 0):.2f}[ig]", style="dim")
+                score_text.append(")", style="dim")
+                title.append(score_text)
+
             parts.append(title)
 
             # 描述
@@ -167,20 +184,81 @@ class DiagnosisRenderer:
 
         return Group(*parts)
 
+    def render_rar_recommendation(
+        self,
+        recommendations: list,
+    ) -> Group:
+        """渲染 RAR 推荐
+
+        Args:
+            recommendations: [{"observation": str, "method": str, "why": str, "related_root_causes": list}, ...]
+
+        Returns:
+            Rich Group 对象
+        """
+        if not recommendations:
+            return Group(Text("暂无推荐，请提供更多信息", style="yellow"))
+
+        parts = []
+
+        # 标题
+        parts.append(Text(f"建议确认以下 {len(recommendations)} 个现象：", style="bold yellow"))
+        parts.append(Text(""))
+
+        # 渲染每个推荐
+        for i, rec in enumerate(recommendations, 1):
+            obs = rec.get("observation", "")
+            method = rec.get("method", "")
+            why = rec.get("why", "")
+            related = rec.get("related_root_causes", [])
+
+            # 标题行
+            title = Text()
+            title.append(f"[{i}] ", style="bold yellow")
+            title.append(obs, style="bold")
+            parts.append(title)
+
+            # 观察方法
+            if method:
+                parts.append(Text("    观察方法:", style="dim"))
+                parts.append(Text(f"    {method.strip()}"))
+
+            # 推荐原因
+            if why:
+                parts.append(Text(f"    推荐原因: {why}", style="italic dim"))
+
+            # 相关根因
+            if related:
+                parts.append(Text(f"    可能根因: {', '.join(related)}", style="cyan"))
+
+            parts.append(Text(""))  # 空行
+
+        parts.append(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
+
+        return Group(*parts)
+
     def render_diagnosis_result(
         self,
         root_cause: str,
         diagnosis_summary: str = "",
         citations: list = None,
         show_border: bool = True,
+        observed_phenomena: list = None,
+        reasoning: str = "",
+        solution: str = "",
+        forced: bool = False,
     ) -> Union[Panel, Group]:
         """渲染诊断结果
 
         Args:
             root_cause: 根因描述
-            diagnosis_summary: 诊断总结（Markdown）
+            diagnosis_summary: 诊断总结（Markdown，GAR 使用）
             citations: 引用工单 [{"ticket_id": str, "description": str}, ...]
             show_border: 是否显示边框（默认 True）
+            observed_phenomena: 观察到的现象列表（RAR 使用）
+            reasoning: 推理链路（RAR 使用）
+            solution: 恢复措施（RAR 使用）
+            forced: 是否强制诊断（RAR 使用，信息不足时）
 
         Returns:
             Rich Panel 或 Group 对象
@@ -193,11 +271,34 @@ class DiagnosisRenderer:
         info.append(f"{root_cause}\n", style="green bold")
         content_parts.append(info)
 
-        # 诊断报告（Markdown 渲染）
+        # 诊断报告（Markdown 渲染）- GAR 使用
         if diagnosis_summary:
             md = Markdown(diagnosis_summary, justify="left")
             content_parts.append(md)
             content_parts.append(Text(""))
+
+        # RAR 专用：构建 Markdown 诊断报告
+        if observed_phenomena or reasoning or solution:
+            diagnosis_md_parts = []
+
+            if observed_phenomena:
+                diagnosis_md_parts.append("### 观察到的现象\n")
+                for i, obs in enumerate(observed_phenomena, 1):
+                    diagnosis_md_parts.append(f"{i}. {obs}\n")
+                diagnosis_md_parts.append("\n")
+
+            if reasoning:
+                diagnosis_md_parts.append("### 推理链路\n")
+                diagnosis_md_parts.append(f"{reasoning}\n\n")
+
+            if solution:
+                diagnosis_md_parts.append("### 恢复措施\n")
+                diagnosis_md_parts.append(f"{solution}\n")
+
+            if diagnosis_md_parts:
+                md = Markdown("".join(diagnosis_md_parts), justify="left")
+                content_parts.append(md)
+                content_parts.append(Text(""))
 
         # 引用工单
         if citations:
@@ -206,22 +307,27 @@ class DiagnosisRenderer:
             for i, citation in enumerate(citations, 1):
                 cite_text = Text()
                 cite_text.append(f"[{i}] ", style="dim")
-                cite_text.append(f"{citation['ticket_id']}", style="bold cyan")
-                cite_text.append(f": {citation['description']}")
+                # 支持两种格式：dict 或 str
+                if isinstance(citation, dict):
+                    cite_text.append(f"{citation['ticket_id']}", style="bold cyan")
+                    if citation.get('description'):
+                        cite_text.append(f": {citation['description']}")
+                else:
+                    cite_text.append(f"{citation}", style="bold cyan")
                 content_parts.append(cite_text)
 
         # 无边框模式：直接返回 Group
         if not show_border:
-            # 添加标题
-            title_text = Text("✓ 根因已定位", style="green bold")
+            title_style = "green bold" if not forced else "yellow bold"
+            title_text = Text("✓ 根因已定位" if not forced else "⚠ 根因已定位（信息不足）", style=title_style)
             return Group(title_text, Text(""), *content_parts)
 
         # 使用 Panel 包装（有边框）
         panel = Panel(
             Group(*content_parts),
-            title="✓ 根因已定位",
+            title="✓ 根因已定位" if not forced else "⚠ 根因已定位（信息不足）",
             title_align="left",
-            border_style="green",
+            border_style="green" if not forced else "yellow",
             width=min(100, self.console.width) if self.console else 100,
             padding=(1, 2),
         )

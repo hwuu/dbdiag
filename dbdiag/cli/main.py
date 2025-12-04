@@ -330,36 +330,9 @@ class GARCLI(CLI):
                 self._recommended_phenomenon_ids.add(phenomenon.phenomenon_id)
                 self.stats["recommended"] += 1
 
-        # 标题
-        self._print_indented(Text(f"建议确认以下 {len(phenomena_with_reasons)} 个现象：", style="bold yellow"))
-        self._print_indented(Text(""))
-
-        # 渲染每个现象
-        for i, item in enumerate(phenomena_with_reasons, 1):
-            phenomenon = item["phenomenon"]
-            reason = item.get("reason", "")
-
-            # 标题行
-            title = Text()
-            title.append(f"[{i}] ", style="bold yellow")
-            title.append(phenomenon.phenomenon_id, style="bold cyan")
-            self._print_indented(title)
-
-            # 描述
-            self._print_indented(Text(phenomenon.description), num_spaces=6)
-
-            # 观察方法
-            if phenomenon.observation_method:
-                self._print_indented(Text("观察方法:", style="dim"), num_spaces=6)
-                self._print_indented(Text(phenomenon.observation_method.strip()), num_spaces=6)
-
-            # 推荐原因
-            if reason:
-                self._print_indented(Text(f"推荐原因: {reason}", style="italic dim"), num_spaces=6)
-
-            self._print_indented(Text(""))  # 空行
-
-        self._print_indented(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
+        # 复用 DiagnosisRenderer 渲染
+        rendered = self.renderer.render_phenomenon_recommendation(phenomena_with_reasons)
+        self._print_indented(rendered)
         self._print_indented(Text(""))
 
     def _render_root_cause_confirmation(self, response: dict):
@@ -389,10 +362,11 @@ class GARCLI(CLI):
         self.stats["confirmed"] = len(session.confirmed_phenomena)
         self.stats["denied"] = len(session.denied_phenomena)
 
-        # 更新 top 3 假设
+        # 更新 top 假设
         self.stats["top_hypotheses"] = []
         if session.active_hypotheses:
-            for hyp in session.active_hypotheses[:3]:
+            top_k = self.config.recommender.hypothesis_top_k
+            for hyp in session.active_hypotheses[:top_k]:
                 desc = self._get_root_cause_description(hyp.root_cause_id)
                 self.stats["top_hypotheses"].append((hyp.confidence, desc))
 
@@ -526,90 +500,37 @@ class RARCLI(CLI):
     # ===== RAR 特有方法 =====
 
     def _render_footer(self) -> Group:
-        """渲染底部状态栏（与 GAR 保持一致）"""
-        # 第一行：轮次、推荐、确认、否认（横向）
-        stats_text = Text()
-        stats_text.append("轮次 ", style="dim")
-        stats_text.append(str(self.round_count), style="bold")
-        stats_text.append("  │  ", style="dim")
-        stats_text.append("推荐 ", style="dim")
-        stats_text.append(str(self.stats["recommended"]), style="bold")
-        stats_text.append("  │  ", style="dim")
-        stats_text.append("确认 ", style="dim")
-        stats_text.append(str(self.stats["confirmed"]), style="bold green")
-        stats_text.append("  │  ", style="dim")
-        stats_text.append("否认 ", style="dim")
-        stats_text.append(str(self.stats["denied"]), style="bold red")
-
-        content_parts = [stats_text]
-
-        # 置信度条
-        conf = self.stats["confidence"]
-        content_parts.append(Text(""))  # 空行
-        conf_line = Text()
-        bar_filled = int(conf * 10)
-        bar_empty = 10 - bar_filled
-        conf_line.append("1. ", style="dim")
-        conf_line.append("█" * bar_filled, style="green" if conf >= 0.7 else "yellow")
-        conf_line.append("░" * bar_empty, style="dim")
-        conf_line.append(f" {conf:.0%} ", style="bold")
-        conf_line.append("当前置信度")
-        content_parts.append(conf_line)
-
-        return Group(*content_parts)
+        """渲染底部状态栏（复用 DiagnosisRenderer）"""
+        # RAR 只有一个置信度，包装成假设格式
+        hypotheses = [(self.stats["confidence"], "当前置信度")]
+        return self.renderer.render_status_bar(
+            round_count=self.round_count,
+            recommended=self.stats["recommended"],
+            confirmed=self.stats["confirmed"],
+            denied=self.stats["denied"],
+            hypotheses=hypotheses,
+        )
 
     def _render_recommendation(self, response: dict):
-        """渲染推荐响应（与 GAR 格式对齐）"""
+        """渲染推荐响应（复用 DiagnosisRenderer）"""
         recommendations = response.get("recommendations", [])
-        reasoning = response.get("reasoning", "")
         confidence = response.get("confidence", 0.0)
 
         # 更新统计
         self.stats["confidence"] = confidence
         self.stats["recommended"] += len(recommendations)
 
-        # 先显示状态栏（与 GAR 一致）
+        # 先显示状态栏
         self._print_indented(self._render_footer())
         self.console.print()
 
-        if recommendations:
-            self._print_indented(Text(f"建议确认以下 {len(recommendations)} 个现象：", style="bold yellow"))
-            self._print_indented(Text(""))
-
-            for i, rec in enumerate(recommendations, 1):
-                obs = rec.get("observation", "")
-                method = rec.get("method", "")
-                why = rec.get("why", "")
-                related = rec.get("related_root_causes", [])
-
-                # 标题行（与 GAR 格式对齐）
-                title = Text()
-                title.append(f"[{i}] ", style="bold yellow")
-                title.append(obs, style="bold")
-                self._print_indented(title)
-
-                # 描述（与 GAR 观察方法一致）
-                if method:
-                    self._print_indented(Text("观察方法:", style="dim"), num_spaces=6)
-                    self._print_indented(Text(method.strip()), num_spaces=6)
-
-                # 推荐原因（与 GAR 格式一致）
-                if why:
-                    self._print_indented(Text(f"推荐原因: {why}", style="italic dim"), num_spaces=6)
-
-                # 相关根因
-                if related:
-                    self._print_indented(Text(f"可能根因: {', '.join(related)}", style="cyan"), num_spaces=6)
-
-                self._print_indented(Text(""))  # 空行
-
-            self._print_indented(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
-        else:
-            self._print_indented(Text("暂无推荐，请提供更多信息", style="yellow"))
+        # 复用 DiagnosisRenderer 渲染
+        rendered = self.renderer.render_rar_recommendation(recommendations)
+        self._print_indented(rendered)
         self._print_indented(Text(""))
 
     def _render_diagnosis(self, response: dict):
-        """渲染诊断响应（与 GAR 格式对齐）"""
+        """渲染诊断响应（复用 DiagnosisRenderer）"""
         root_cause = response.get("root_cause", "未知")
         confidence = response.get("confidence", 0.0)
         reasoning = response.get("reasoning", "")
@@ -624,57 +545,14 @@ class RARCLI(CLI):
         # 先显示状态栏
         self._print_indented(self._render_footer())
 
-        content_parts = []
-
-        # 根因
-        info = Text()
-        info.append("根因: ", style="bold")
-        info.append(f"{root_cause}\n", style="green bold")
-        content_parts.append(info)
-
-        # 构建 Markdown 诊断报告（与 GAR 一致）
-        diagnosis_md_parts = []
-
-        # 观察到的现象
-        if observed_phenomena:
-            diagnosis_md_parts.append("### 观察到的现象\n")
-            for i, obs in enumerate(observed_phenomena, 1):
-                diagnosis_md_parts.append(f"{i}. {obs}\n")
-            diagnosis_md_parts.append("\n")
-
-        # 推理链路
-        if reasoning:
-            diagnosis_md_parts.append("### 推理链路\n")
-            diagnosis_md_parts.append(f"{reasoning}\n\n")
-
-        # 恢复措施
-        if solution:
-            diagnosis_md_parts.append("### 恢复措施\n")
-            diagnosis_md_parts.append(f"{solution}\n")
-
-        if diagnosis_md_parts:
-            md = Markdown("".join(diagnosis_md_parts), justify="left")
-            content_parts.append(md)
-            content_parts.append(Text(""))
-
-        # 引用工单（与 GAR 格式一致）
-        if cited_tickets:
-            content_parts.append(Text("引用工单", style="bold"))
-            content_parts.append(Text(""))
-            for i, ticket_id in enumerate(cited_tickets, 1):
-                cite_text = Text()
-                cite_text.append(f"[{i}] ", style="dim")
-                cite_text.append(f"{ticket_id}", style="bold cyan")
-                content_parts.append(cite_text)
-
-        # 使用 Panel 包装（与 GAR 一致）
-        panel = Panel(
-            Group(*content_parts),
-            title="✓ 根因已定位" if not forced else "⚠ 根因已定位（信息不足）",
-            title_align="left",
-            border_style="green" if not forced else "yellow",
-            width=min(100, self.console.width),
-            padding=(1, 2),
+        # 复用 DiagnosisRenderer 渲染
+        panel = self.renderer.render_diagnosis_result(
+            root_cause=root_cause,
+            citations=cited_tickets,
+            observed_phenomena=observed_phenomena,
+            reasoning=reasoning,
+            solution=solution,
+            forced=forced,
         )
         self._print_indented(Text(""))
         self._print_indented(panel)

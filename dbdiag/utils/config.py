@@ -46,7 +46,9 @@ class RecommenderConfig(BaseModel):
     weights: RecommenderWeightsConfig = RecommenderWeightsConfig()
     # 检索相关
     retrieval_top_k: int = 5  # 检索 top-m 现象
-    recommend_top_n: int = 3  # 推荐 top-n 现象
+    recommend_top_n: int = 5  # 推荐 top-n 现象
+    # 假设追踪
+    hypothesis_top_k: int = 5  # 追踪 top-k 假设
     # 置信度阈值
     high_confidence_threshold: float = 0.80  # 高置信度阈值，达到后确认根因
     medium_confidence_threshold: float = 0.50  # 中等置信度阈值

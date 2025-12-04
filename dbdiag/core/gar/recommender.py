@@ -153,7 +153,7 @@ class PhenomenonRecommendationEngine:
             )
 
             # 计算得分
-            score = self._calculate_phenomenon_score(
+            score_details = self._calculate_phenomenon_score(
                 phenomenon_id=phenomenon_id,
                 related_root_cause_ids=related_root_cause_ids,
                 session=session,
@@ -166,7 +166,8 @@ class PhenomenonRecommendationEngine:
 
             scored_phenomena.append({
                 "phenomenon": phenomenon,
-                "score": score,
+                "score": score_details["score"],
+                "score_details": score_details,
                 "related_hypotheses": related_hypotheses,
             })
 
@@ -179,7 +180,7 @@ class PhenomenonRecommendationEngine:
         phenomenon_id: str,
         related_root_cause_ids: Set[str],
         session: SessionState,
-    ) -> float:
+    ) -> Dict:
         """
         计算现象的推荐得分
 
@@ -191,7 +192,7 @@ class PhenomenonRecommendationEngine:
             session: 会话状态
 
         Returns:
-            推荐得分
+            得分详情字典，包含 score 和各分项
         """
         weights = self.config.weights
 
@@ -216,7 +217,21 @@ class PhenomenonRecommendationEngine:
             weights.information_gain * information_gain
         )
 
-        return score
+        return {
+            "score": score,
+            "weights": {
+                "popularity": weights.popularity,
+                "specificity": weights.specificity,
+                "hypothesis_priority": weights.hypothesis_priority,
+                "information_gain": weights.information_gain,
+            },
+            "values": {
+                "popularity": popularity,
+                "specificity": specificity,
+                "hypothesis_priority": hypothesis_priority,
+                "information_gain": information_gain,
+            },
+        }
 
     def _calculate_popularity(self, related_root_cause_ids: Set[str]) -> float:
         """
@@ -414,6 +429,7 @@ class PhenomenonRecommendationEngine:
         for item in phenomena_info:
             phenomenon = item["phenomenon"]
             related_hypotheses = item.get("related_hypotheses", [])
+            score_details = item.get("score_details", {})
 
             # 构建原因说明
             if related_hypotheses:
@@ -429,6 +445,7 @@ class PhenomenonRecommendationEngine:
                 "phenomenon": phenomenon,
                 "reason": reason,
                 "related_hypotheses": related_hypotheses,
+                "score_details": score_details,
             })
 
         return {

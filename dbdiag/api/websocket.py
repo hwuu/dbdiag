@@ -81,6 +81,7 @@ class WebChatSession:
         self.db_path = get_default_db_path()
 
         # 服务（延迟初始化）
+        self._app_config = None
         self._llm_service: Optional[LLMService] = None
         self._embedding_service: Optional[EmbeddingService] = None
         self._dialogue_manager: Optional[GARDialogueManager] = None
@@ -105,9 +106,9 @@ class WebChatSession:
     def _init_services(self):
         """延迟初始化服务（首次使用时）"""
         if self._llm_service is None:
-            app_config = load_config()
-            self._llm_service = LLMService(app_config)
-            self._embedding_service = EmbeddingService(app_config)
+            self._app_config = load_config()
+            self._llm_service = LLMService(self._app_config)
+            self._embedding_service = EmbeddingService(self._app_config)
             self._root_cause_dao = RootCauseDAO(self.db_path)
 
             # 根据模式创建对话管理器
@@ -117,7 +118,7 @@ class WebChatSession:
                 self._llm_service,
                 self._embedding_service,
                 progress_callback=self._on_progress,
-                recommender_config=app_config.recommender,
+                recommender_config=self._app_config.recommender,
                 hybrid_mode=hybrid_mode,
             )
 
@@ -295,7 +296,8 @@ class WebChatSession:
 
         self.stats["top_hypotheses"] = []
         if session.active_hypotheses:
-            for hyp in session.active_hypotheses[:3]:
+            top_k = self._app_config.recommender.hypothesis_top_k if self._app_config else 5
+            for hyp in session.active_hypotheses[:top_k]:
                 desc = self._root_cause_dao.get_description(hyp.root_cause_id)
                 self.stats["top_hypotheses"].append((hyp.confidence, desc))
 

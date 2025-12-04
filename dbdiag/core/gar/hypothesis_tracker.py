@@ -10,6 +10,7 @@ from dbdiag.core.gar.retriever import PhenomenonRetriever
 from dbdiag.dao import TicketDAO, TicketPhenomenonDAO, PhenomenonRootCauseDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
+from dbdiag.utils.config import RecommenderConfig
 
 
 class PhenomenonHypothesisTracker:
@@ -24,6 +25,7 @@ class PhenomenonHypothesisTracker:
         llm_service: LLMService,
         embedding_service: EmbeddingService = None,
         progress_callback: Optional[callable] = None,
+        recommender_config: Optional[RecommenderConfig] = None,
     ):
         """
         初始化假设追踪器
@@ -33,11 +35,13 @@ class PhenomenonHypothesisTracker:
             llm_service: LLM 服务实例（单例）
             embedding_service: Embedding 服务实例（单例，可选）
             progress_callback: 进度回调函数，签名为 callback(message: str)
+            recommender_config: 推荐引擎配置
         """
         self.db_path = db_path
         self.llm_service = llm_service
         self.embedding_service = embedding_service
         self.progress_callback = progress_callback
+        self.config = recommender_config or RecommenderConfig()
         self.retriever = PhenomenonRetriever(db_path, embedding_service)
         self._ticket_dao = TicketDAO(db_path)
         self._ticket_phenomenon_dao = TicketPhenomenonDAO(db_path)
@@ -128,7 +132,7 @@ class PhenomenonHypothesisTracker:
                     )
 
         hypotheses.sort(key=lambda h: h.confidence, reverse=True)
-        session.active_hypotheses = hypotheses[:3]
+        session.active_hypotheses = hypotheses[:self.config.hypothesis_top_k]
 
         return session
 

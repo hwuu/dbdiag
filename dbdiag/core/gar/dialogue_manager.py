@@ -60,7 +60,8 @@ class GARDialogueManager:
         self.session_service = SessionService(db_path)
         self.hypothesis_tracker = PhenomenonHypothesisTracker(
             db_path, llm_service, embedding_service,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            recommender_config=recommender_config,
         )
         self.recommender = PhenomenonRecommendationEngine(
             db_path, llm_service, recommender_config
