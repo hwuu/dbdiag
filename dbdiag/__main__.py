@@ -36,14 +36,19 @@ def main():
     help="使用混合增强推理方法（实验性）",
 )
 @click.option(
+    "--gar2",
+    is_flag=True,
+    help="使用图谱增强推理 v2 方法（实验性）",
+)
+@click.option(
     "--db",
     default=None,
     help="数据库文件路径（默认: data/tickets.db 或 DATA_DIR 环境变量）",
 )
-def interactive_cli(rar: bool, hyb: bool, db: str):
+def interactive_cli(rar: bool, hyb: bool, gar2: bool, db: str):
     """启动交互式命令行诊断（推荐）"""
     from dbdiag.cli.main import main as cli_main
-    cli_main(use_rar=rar, use_hyb=hyb, db_path=db)
+    cli_main(use_rar=rar, use_hyb=hyb, use_gar2=gar2, db_path=db)
 
 
 @main.command("web")

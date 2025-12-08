@@ -16,6 +16,7 @@ from rich.theme import Theme
 import rich.markdown
 
 from dbdiag.core.gar.dialogue_manager import GARDialogueManager
+from dbdiag.core.gar2.dialogue_manager import GAR2DialogueManager
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -100,8 +101,8 @@ class WebChatSession:
         }
         self._recommended_phenomenon_ids: set = set()
 
-        # 诊断模式（从配置读取，默认 hyb）
-        self.diagnosis_mode = config.get("web", {}).get("diagnosis_mode", "hyb")
+        # 诊断模式（从配置读取，默认 gar2）
+        self.diagnosis_mode = config.get("web", {}).get("diagnosis_mode", "gar2")
 
     def _init_services(self):
         """延迟初始化服务（首次使用时）"""
@@ -112,15 +113,23 @@ class WebChatSession:
             self._root_cause_dao = RootCauseDAO(self.db_path)
 
             # 根据模式创建对话管理器
-            hybrid_mode = self.diagnosis_mode == "hyb"
-            self._dialogue_manager = GARDialogueManager(
-                self.db_path,
-                self._llm_service,
-                self._embedding_service,
-                progress_callback=self._on_progress,
-                recommender_config=self._app_config.recommender,
-                hybrid_mode=hybrid_mode,
-            )
+            if self.diagnosis_mode == "gar2":
+                self._dialogue_manager = GAR2DialogueManager(
+                    self.db_path,
+                    self._llm_service,
+                    self._embedding_service,
+                    progress_callback=self._on_progress,
+                )
+            else:
+                hybrid_mode = self.diagnosis_mode == "hyb"
+                self._dialogue_manager = GARDialogueManager(
+                    self.db_path,
+                    self._llm_service,
+                    self._embedding_service,
+                    progress_callback=self._on_progress,
+                    recommender_config=self._app_config.recommender,
+                    hybrid_mode=hybrid_mode,
+                )
 
     def _on_progress(self, message: str):
         """进度回调（可选：发送进度消息给客户端）"""
@@ -158,15 +167,28 @@ class WebChatSession:
         self.console.print(f"[bold]• 第 {self.round_count} 轮[/bold]")
 
         try:
-            if not self.session_id:
-                self.console.print("  [dim]正在分析问题...[/dim]")
-                response = self._dialogue_manager.start_conversation(content)
-                self.session_id = response.get("session_id")
+            if self.diagnosis_mode == "gar2":
+                # GAR2 模式
+                if not self.session_id:
+                    self.console.print("  [dim]正在分析问题...[/dim]")
+                    response = self._dialogue_manager.start_conversation(content)
+                    session = response.get("session")
+                    if session:
+                        self.session_id = session.session_id
+                else:
+                    self.console.print("  [dim]正在处理反馈...[/dim]")
+                    response = self._dialogue_manager.continue_conversation(content)
             else:
-                self.console.print("  [dim]正在处理反馈...[/dim]")
-                response = self._dialogue_manager.continue_conversation(
-                    self.session_id, content
-                )
+                # GAR/Hyb 模式
+                if not self.session_id:
+                    self.console.print("  [dim]正在分析问题...[/dim]")
+                    response = self._dialogue_manager.start_conversation(content)
+                    self.session_id = response.get("session_id")
+                else:
+                    self.console.print("  [dim]正在处理反馈...[/dim]")
+                    response = self._dialogue_manager.continue_conversation(
+                        self.session_id, content
+                    )
 
             self.console.print()
 
@@ -188,6 +210,12 @@ class WebChatSession:
                 self._render_phenomenon_recommendation(response)
             elif action == "confirm_root_cause":
                 self._render_root_cause_confirmation(response)
+            elif action == "recommend":
+                # GAR2 推荐
+                self._render_gar2_recommendation(response)
+            elif action == "diagnose":
+                # GAR2 诊断
+                self._render_gar2_diagnosis(response)
             else:
                 message = response.get("message", "")
                 if message:
@@ -228,6 +256,9 @@ class WebChatSession:
             self.round_count = 0
             self.stats = {"recommended": 0, "confirmed": 0, "denied": 0, "top_hypotheses": []}
             self._recommended_phenomenon_ids = set()
+            # GAR2 模式需要重置 dialogue_manager
+            if self.diagnosis_mode == "gar2" and self._dialogue_manager:
+                self._dialogue_manager.reset()
             self.console.print("[green]会话已重置，请重新描述问题[/green]")
 
         elif command == "/exit":
@@ -282,30 +313,95 @@ class WebChatSession:
         self.console.print()
         self.console.print("  ", result)
 
+    def _render_gar2_recommendation(self, response: dict):
+        """渲染 GAR2 推荐"""
+        from dbdiag.models.common import Phenomenon
+
+        recommendations = response.get("recommendations", [])
+        if not recommendations:
+            self.console.print("  [yellow]没有更多现象可推荐[/yellow]")
+            return
+
+        # 转换为 render_phenomenon_recommendation 所需格式
+        phenomena_with_reasons = []
+        for rec in recommendations:
+            phenomenon = Phenomenon(
+                phenomenon_id=rec.get("phenomenon_id", ""),
+                description=rec.get("description", ""),
+                observation_method=rec.get("observation_method", ""),
+                source_anomaly_ids=[],
+                cluster_size=0,
+            )
+            phenomena_with_reasons.append({
+                "phenomenon": phenomenon,
+                "reason": rec.get("reason", ""),
+            })
+
+        recommendation = self.renderer.render_phenomenon_recommendation(phenomena_with_reasons)
+        self.console.print("  ", recommendation)
+
+    def _render_gar2_diagnosis(self, response: dict):
+        """渲染 GAR2 诊断结果"""
+        root_cause = response.get("root_cause", "未知")
+        solution = response.get("solution", "")
+        observed_phenomena = response.get("observed_phenomena", [])
+
+        result = self.renderer.render_diagnosis_result(
+            root_cause=root_cause,
+            observed_phenomena=observed_phenomena,
+            solution=solution,
+            show_border=False,
+        )
+        self.console.print()
+        self.console.print("  ", result)
+
     def _update_stats_from_session(self):
         """从 session 更新统计信息"""
-        if not self.session_id or not self._dialogue_manager:
+        if not self._dialogue_manager:
             return
 
-        session = self._dialogue_manager.session_service.get_session(self.session_id)
-        if not session:
-            return
+        if self.diagnosis_mode == "gar2":
+            # GAR2 模式
+            session = self._dialogue_manager.get_session()
+            if not session:
+                return
 
-        self.stats["confirmed"] = len(session.confirmed_phenomena)
-        self.stats["denied"] = len(session.denied_phenomena)
+            self.stats["recommended"] = len(session.symptom.observations)
+            self.stats["confirmed"] = len(session.symptom.get_matched_phenomenon_ids())
+            self.stats["denied"] = len(session.symptom.blocked_phenomenon_ids)
 
-        self.stats["top_hypotheses"] = []
-        if session.active_hypotheses:
-            top_k = self._app_config.recommender.hypothesis_top_k if self._app_config else 5
-            for hyp in session.active_hypotheses[:top_k]:
-                desc = self._root_cause_dao.get_description(hyp.root_cause_id)
-                self.stats["top_hypotheses"].append((hyp.confidence, desc))
+            self.stats["top_hypotheses"] = []
+            if session.hypotheses:
+                for hyp in session.hypotheses[:5]:
+                    desc = self._root_cause_dao.get_description(hyp.root_cause_id)
+                    self.stats["top_hypotheses"].append((hyp.confidence, desc))
+        else:
+            # GAR/Hyb 模式
+            if not self.session_id:
+                return
+
+            session = self._dialogue_manager.session_service.get_session(self.session_id)
+            if not session:
+                return
+
+            self.stats["confirmed"] = len(session.confirmed_phenomena)
+            self.stats["denied"] = len(session.denied_phenomena)
+
+            self.stats["top_hypotheses"] = []
+            if session.active_hypotheses:
+                top_k = self._app_config.recommender.hypothesis_top_k if self._app_config else 5
+                for hyp in session.active_hypotheses[:top_k]:
+                    desc = self._root_cause_dao.get_description(hyp.root_cause_id)
+                    self.stats["top_hypotheses"].append((hyp.confidence, desc))
 
     def render_welcome(self) -> str:
         """渲染欢迎消息"""
         # LOGO
         logo = self.renderer.get_logo(self.diagnosis_mode)
-        if self.diagnosis_mode == "hyb":
+        if self.diagnosis_mode == "gar2":
+            self.console.print(f"[bold cyan]{logo}[/bold cyan]")
+            self.console.print("[bold cyan]图谱增强推理 v2（实验性）[/bold cyan]")
+        elif self.diagnosis_mode == "hyb":
             self.console.print(f"[bold green]{logo}[/bold green]")
             self.console.print("[bold green]混合增强推理方法[/bold green]")
         elif self.diagnosis_mode == "rar":

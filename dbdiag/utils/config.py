@@ -29,7 +29,7 @@ class WebConfig(BaseModel):
     """Web 服务配置"""
     host: str = "127.0.0.1"
     port: int = 8000
-    diagnosis_mode: str = "hyb"  # gar/hyb/rar
+    diagnosis_mode: str = "gar2"  # gar/hyb/rar/gar2
 
 
 class RecommenderWeightsConfig(BaseModel):

@@ -38,7 +38,7 @@ class TestWebChatSession:
     def test_init_default_config(self, mock_websocket):
         """测试默认配置初始化"""
         session = WebChatSession(mock_websocket, {})
-        assert session.diagnosis_mode == "hyb"  # 默认 hyb
+        assert session.diagnosis_mode == "gar2"  # 默认 gar2
         assert session.session_id is None
         assert session.round_count == 0
 

@@ -575,12 +575,208 @@ class RARCLI(CLI):
             self.dialogue_manager.deny_observation(message)
 
 
-def main(use_rar: bool = False, use_hyb: bool = False, db_path: str = None):
+class GAR2CLI(CLI):
+    """GAR2 CLI（图谱增强推理 v2，实验性）
+
+    基于观察的诊断推理引擎。
+    """
+
+    def __init__(self):
+        """初始化"""
+        super().__init__()
+
+        from dbdiag.core.gar2.dialogue_manager import GAR2DialogueManager
+        from dbdiag.dao import RootCauseDAO
+
+        # 渲染器
+        self.renderer = DiagnosisRenderer(self.console)
+
+        # GAR2 对话管理器
+        self.dialogue_manager = GAR2DialogueManager(
+            self.db_path, self.llm_service, self.embedding_service,
+            progress_callback=self._print_progress,
+        )
+
+        # DAO
+        self._root_cause_dao = RootCauseDAO(self.db_path)
+
+        # 统计
+        self.stats = {
+            "observations": 0,  # 观察数
+            "matched": 0,       # 匹配的观察数
+            "blocked": 0,       # 阻塞的现象数
+        }
+
+    def _print_progress(self, message: str):
+        """打印进度信息"""
+        self._print_indented(Text(f"→ {message}", style="dim"))
+
+    # ===== 实现抽象方法 =====
+
+    def _show_welcome(self) -> None:
+        """显示欢迎信息"""
+        self.console.print(Text(self.renderer.get_logo("gar2"), style="bold cyan"))
+        self.console.print(Text("图谱增强推理 v2（实验性）", style="bold cyan"))
+
+    def _get_prompt(self) -> str:
+        """获取输入提示符"""
+        return "[bold cyan]> [/bold cyan]"
+
+    def _get_available_commands(self) -> str:
+        """获取可用命令列表"""
+        return "/help /status /reset /exit"
+
+    def _show_help(self) -> None:
+        """显示帮助信息"""
+        self.console.print(self.renderer.render_help("gar2"))
+
+    def _show_status(self) -> None:
+        """显示当前状态"""
+        if not self.session_id:
+            self.console.print(Text("还没有开始诊断会话", style="yellow"))
+        else:
+            self._update_stats_from_session()
+            self.console.print(self._render_footer())
+
+    def _reset_session(self) -> None:
+        """重置会话状态"""
+        self.session_id = None
+        self.round_count = 0
+        self.stats = {"observations": 0, "matched": 0, "blocked": 0}
+        self.dialogue_manager.reset()
+
+    def _handle_diagnosis(self, user_message: str) -> bool:
+        """处理诊断消息，返回 True 表示诊断完成"""
+        try:
+            self.console.print()
+            self.console.print(Text.from_markup(f"[bold]• 第 {self.round_count + 1} 轮[/bold]"))
+            self.round_count += 1
+
+            if not self.session_id:
+                self._print_indented(Text("正在分析问题...", style="dim"))
+                response = self.dialogue_manager.start_conversation(user_message)
+                session = response.get("session")
+                if session:
+                    self.session_id = session.session_id
+            else:
+                self._print_indented(Text("正在处理反馈...", style="dim"))
+                response = self.dialogue_manager.continue_conversation(user_message)
+
+            self.console.print()
+
+            # 更新统计并显示状态
+            self._update_stats_from_session()
+            self._print_indented(self._render_footer())
+            self.console.print()
+
+            # 渲染响应
+            action = response.get("action", "")
+            if action == "recommend":
+                self._render_recommendation(response)
+                return False
+            elif action == "diagnose":
+                self._render_diagnosis(response)
+                return True
+            elif action == "ask_more_info":
+                self._print_indented(Text(response.get("message", "请提供更多信息"), style="yellow"))
+                return False
+            else:
+                message = response.get("message", "")
+                if message:
+                    self._print_indented(Text(message))
+                return False
+
+        except Exception as e:
+            self._print_indented(Text(f"处理失败: {str(e)}", style="red"))
+            import traceback
+            traceback.print_exc()
+            return False
+
+    # ===== GAR2 特有方法 =====
+
+    def _get_root_cause_description(self, root_cause_id: str) -> str:
+        """获取根因描述"""
+        return self._root_cause_dao.get_description(root_cause_id)
+
+    def _render_footer(self) -> Group:
+        """渲染底部状态栏"""
+        session = self.dialogue_manager.get_session()
+        hypotheses = []
+        if session and session.hypotheses:
+            for hyp in session.hypotheses[:3]:
+                desc = self._get_root_cause_description(hyp.root_cause_id)
+                hypotheses.append((hyp.confidence, desc))
+
+        return self.renderer.render_status_bar(
+            round_count=self.round_count,
+            recommended=self.stats["observations"],
+            confirmed=self.stats["matched"],
+            denied=self.stats["blocked"],
+            hypotheses=hypotheses,
+        )
+
+    def _render_recommendation(self, response: dict):
+        """渲染推荐响应（复用 DiagnosisRenderer）"""
+        recommendations = response.get("recommendations", [])
+
+        if not recommendations:
+            self._print_indented(Text("没有更多现象可推荐", style="yellow"))
+            return
+
+        # 转换为 render_phenomenon_recommendation 所需格式
+        from dbdiag.models.common import Phenomenon
+        phenomena_with_reasons = []
+        for rec in recommendations:
+            phenomenon = Phenomenon(
+                phenomenon_id=rec.get("phenomenon_id", ""),
+                description=rec.get("description", ""),
+                observation_method=rec.get("observation_method", ""),
+                source_anomaly_ids=[],  # 渲染时不需要
+                cluster_size=0,  # 渲染时不需要
+            )
+            phenomena_with_reasons.append({
+                "phenomenon": phenomenon,
+                "reason": rec.get("reason", ""),
+            })
+
+        # 复用 DiagnosisRenderer 渲染
+        rendered = self.renderer.render_phenomenon_recommendation(phenomena_with_reasons)
+        self._print_indented(rendered)
+        self._print_indented(Text(""))
+
+    def _render_diagnosis(self, response: dict):
+        """渲染诊断结果"""
+        root_cause = response.get("root_cause", "未知")
+        confidence = response.get("confidence", 0.0)
+        solution = response.get("solution", "")
+        observed_phenomena = response.get("observed_phenomena", [])
+
+        panel = self.renderer.render_diagnosis_result(
+            root_cause=root_cause,
+            observed_phenomena=observed_phenomena,
+            solution=solution,
+        )
+        self._print_indented(Text(""))
+        self._print_indented(panel)
+
+    def _update_stats_from_session(self):
+        """从 session 更新统计信息"""
+        session = self.dialogue_manager.get_session()
+        if not session:
+            return
+
+        self.stats["observations"] = len(session.symptom.observations)
+        self.stats["matched"] = len(session.symptom.get_matched_phenomenon_ids())
+        self.stats["blocked"] = len(session.symptom.blocked_phenomenon_ids)
+
+
+def main(use_rar: bool = False, use_hyb: bool = False, use_gar2: bool = False, db_path: str = None):
     """入口
 
     Args:
         use_rar: 是否使用 RAR 方法
         use_hyb: 是否使用混合增强方法
+        use_gar2: 是否使用 GAR2 方法
         db_path: 数据库路径，如果指定则覆盖默认路径
     """
     import os
@@ -589,7 +785,9 @@ def main(use_rar: bool = False, use_hyb: bool = False, db_path: str = None):
     if db_path:
         os.environ["DB_PATH"] = db_path
 
-    if use_hyb:
+    if use_gar2:
+        cli = GAR2CLI()
+    elif use_hyb:
         cli = HybCLI()
     elif use_rar:
         cli = RARCLI()

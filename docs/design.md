@@ -111,7 +111,7 @@ dbdiag/
 │   │       ├── index.html        # Web 控制台页面
 │   │       └── style.css         # CLI 风格样式
 │   ├── cli/                      # 命令行界面
-│   │   └── main.py               # CLI/GARCLI/HybCLI/RARCLI 类
+│   │   └── main.py               # CLI/GARCLI/HybCLI/RARCLI/GAR2CLI 类
 │   ├── core/                     # 核心逻辑
 │   │   ├── gar/                  # GAR（图谱增强推理）
 │   │   │   ├── dialogue_manager.py
@@ -119,6 +119,12 @@ dbdiag/
 │   │   │   ├── retriever.py
 │   │   │   ├── recommender.py
 │   │   │   └── response_generator.py
+│   │   ├── gar2/                 # GAR2（图谱增强推理 v2，实验性）
+│   │   │   ├── models.py         # Observation, Symptom, HypothesisV2, SessionStateV2
+│   │   │   ├── observation_matcher.py
+│   │   │   ├── input_analyzer.py
+│   │   │   ├── confidence_calculator.py
+│   │   │   └── dialogue_manager.py
 │   │   └── rar/                  # RAR（检索增强推理）
 │   │       ├── dialogue_manager.py
 │   │       └── retriever.py
@@ -1237,6 +1243,190 @@ class SessionState(BaseModel):
 | **灵活性** | ⚠️ 低 | ✅ 高 | ✅ 中高 |
 | **动态发现** | ❌ 否 | ✅ 是 | ✅ 是 |
 
+#### 4.5.5 GAR2（图谱增强推理 v2，实验性）
+
+**文件**: `dbdiag/core/gar2/`
+
+GAR2 是对 GAR 的重新设计，核心改进包括：
+1. 区分"观察"(Observation) 和"现象"(Phenomenon)
+2. **多目标匹配**：同时匹配 phenomena、root_causes、tickets 三类目标
+
+**核心概念**：
+
+| 概念 | 说明 |
+|------|------|
+| **Phenomenon** | 知识库中的标准现象，有唯一 ID（如 P-0001） |
+| **Observation** | 用户的实际观察，可能匹配到某个 Phenomenon，也可能不匹配 |
+| **Symptom** | 观察列表 + 阻塞列表的集合，贯穿整个会话 |
+| **MatchResult** | 多目标匹配结果，包含 phenomena、root_causes、tickets 三类匹配 |
+| **match_score** | 观察与目标的匹配程度（0-1），高于 0.75 认为匹配 |
+
+**数据模型**：
+
+```python
+class Observation(BaseModel):
+    id: str                                     # obs-001
+    description: str                            # 用户原话
+    source: Literal["user_input", "confirmed"]  # 来源
+    matched_phenomenon_id: Optional[str]        # 匹配的现象 ID
+    match_score: float = 0.0                    # 匹配分数
+
+class Symptom(BaseModel):
+    observations: List[Observation] = []        # 观察列表
+    blocked_phenomenon_ids: Set[str] = set()    # 阻塞的现象
+    blocked_root_cause_ids: Set[str] = set()    # 阻塞的根因
+
+class HypothesisV2(BaseModel):
+    root_cause_id: str
+    confidence: float                           # 置信度
+    contributing_observations: List[str]        # 贡献的观察 ID
+    contributing_phenomena: List[str]           # 贡献的现象 ID
+
+# 多目标匹配结果
+class MatchResult(BaseModel):
+    phenomena: List[PhenomenonMatch]            # 现象匹配列表
+    root_causes: List[RootCauseMatch]           # 根因匹配列表
+    tickets: List[TicketMatch]                  # 工单匹配列表
+```
+
+**多目标匹配流程**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        GAR2 Multi-Target Matching                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────┐                                                              │
+│  │ User Input │                                                              │
+│  │"query slow"│                                                              │
+│  └─────┬──────┘                                                              │
+│        │ embedding                                                           │
+│        ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                     ObservationMatcher.match_all()                      │ │
+│  │                                                                         │ │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐         │ │
+│  │  │ _match_phenomena│  │_match_root_cause│  │ _match_tickets  │         │ │
+│  │  │  (phenomena)    │  │  (root_causes)  │  │(rar_raw_tickets)│         │ │
+│  │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘         │ │
+│  │           │                    │                    │                   │ │
+│  │           ▼                    ▼                    ▼                   │ │
+│  │       PhenomenonMatch     RootCauseMatch       TicketMatch              │ │
+│  │       (P-001, 0.92)       (RC-001, 0.88)      (T-001, RC-001, 0.85)    │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│        │                                                                     │
+│        ▼ MatchResult                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                 ConfidenceCalculator.calculate_with_match_result()      │ │
+│  │                                                                         │ │
+│  │  contribution = Σ (phenomenon × 0.5) + (root_cause × 0.3) + (ticket × 0.2) │
+│  │                                                                         │ │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐         │ │
+│  │  │phenomena matches│  │root_cause match │  │ ticket matches  │         │ │
+│  │  │    weight: 0.5  │  │   weight: 0.3   │  │   weight: 0.2   │         │ │
+│  │  │        │        │  │        │        │  │        │        │         │ │
+│  │  │        ▼        │  │        ▼        │  │        ▼        │         │ │
+│  │  │ phenomenon_root │  │    directly     │  │ticket.root_cause│         │ │
+│  │  │ _causes → RC    │  │    to RC        │  │   _id → RC      │         │ │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘         │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│        │                                                                     │
+│        ▼ confidence                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │              Decision: Recommend or Diagnose                      │       │
+│  │  confidence ≥ 80%  →  diagnose                                    │       │
+│  │  confidence < 80%  →  recommend next phenomena                    │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**多目标匹配权重**：
+
+| 匹配目标 | 权重 | 传播路径 | 说明 |
+|---------|------|---------|------|
+| phenomena | 0.5 | phenomenon → phenomenon_root_causes → root_cause | 传统路径，通过现象-根因关联表 |
+| root_causes | 0.3 | 直接 → root_cause | 用户描述直接匹配根因描述 |
+| tickets | 0.2 | ticket → ticket.root_cause_id → root_cause | 相似历史工单的根因 |
+
+**关键改进**：
+
+1. **多目标匹配**：用户输入同时与三类目标进行向量相似度匹配
+   ```python
+   def match_all(observation_text) -> MatchResult:
+       phenomena = _match_phenomena(embedding)      # 匹配 phenomena 表
+       root_causes = _match_root_causes(embedding)  # 匹配 root_causes 表
+       tickets = _match_tickets(embedding)          # 匹配 rar_raw_tickets 表
+       return MatchResult(phenomena, root_causes, tickets)
+   ```
+
+2. **加权置信度计算**：三种匹配结果按权重贡献到根因置信度
+   ```python
+   # phenomena 贡献（权重 0.5）
+   contribution += match_score * phenomenon_weight * 0.5
+
+   # root_cause 直接贡献（权重 0.3）
+   contribution += match_score * 0.3
+
+   # ticket 贡献（权重 0.2）
+   contribution += match_score * 0.2
+   ```
+
+3. **否认处理**：否认现象时，阻塞该现象及其关联的所有根因
+   ```python
+   def _handle_denial(self, phenomenon_id):
+       related_root_causes = self.confidence_calculator.get_related_root_causes(phenomenon_id)
+       self.session.symptom.block_phenomenon(phenomenon_id, related_root_causes)
+   ```
+
+4. **输入分析器**：支持多种输入格式
+   - 简单格式：`1确认 2否定`（关键词匹配）
+   - 全局操作：`全否定`、`确认`
+   - 自然语言：通过 LLM 结构化提取（可选）
+
+**置信度计算公式**：
+
+```python
+def calculate_with_match_result(symptom, match_result) -> List[HypothesisV2]:
+    # 1. phenomena 匹配贡献（权重 0.5）
+    for pm in match_result.phenomena:
+        for root_cause_id in get_related_root_causes(pm.phenomenon_id):
+            contribution = pm.score * phenomenon_weight * PHENOMENON_WEIGHT
+            root_cause_scores[root_cause_id] += contribution
+
+    # 2. root_cause 直接匹配贡献（权重 0.3）
+    for rcm in match_result.root_causes:
+        contribution = rcm.score * ROOT_CAUSE_WEIGHT
+        root_cause_scores[rcm.root_cause_id] += contribution
+
+    # 3. ticket 匹配贡献（权重 0.2）
+    for tm in match_result.tickets:
+        contribution = tm.score * TICKET_WEIGHT
+        root_cause_scores[tm.root_cause_id] += contribution
+
+    # 4. 加上 symptom 中已确认观察的贡献
+    for obs in symptom.observations:
+        if obs.matched_phenomenon_id:
+            # 同样按 PHENOMENON_WEIGHT=0.5 计算
+            ...
+
+    # 5. 归一化
+    for root_cause_id, raw_score in root_cause_scores.items():
+        confidence = raw_score / len(all_phenomena_for_root_cause)
+```
+
+**与 GAR 对比**：
+
+| 维度 | GAR | GAR2 |
+|------|-----|------|
+| 匹配目标 | 仅 phenomena | phenomena + root_causes + tickets |
+| 现象状态 | 确认/否认二元 | 匹配度连续值 |
+| 置信度输入 | 确认现象数量 | 多目标匹配度加权 |
+| 否认处理 | 仅标记现象 | 阻塞现象+关联根因 |
+| 数据模型 | 复用 GAR Session | 独立的 SessionStateV2 |
+
 ### 4.6 CLI 架构
 
 **文件**: `dbdiag/cli/main.py`
@@ -1257,19 +1447,19 @@ class SessionState(BaseModel):
 │                        │  - run()    │                                  │
 │                        └──────┬──────┘                                  │
 │                               │                                         │
-│              ┌────────────────┼────────────────┐                        │
-│              │                │                │                        │
-│              ▼                │                ▼                        │
-│      ┌─────────────┐          │        ┌─────────────┐                  │
-│      │   GARCLI    │          │        │   RARCLI    │                  │
-│      │   (Graph)   │          │        │ (Retrieval) │                  │
-│      └──────┬──────┘          │        └─────────────┘                  │
-│             │                 │                                         │
-│             ▼                 │                                         │
-│      ┌─────────────┐          │                                         │
-│      │   HybCLI    │          │                                         │
-│      │  (Hybrid)   │          │                                         │
-│      └─────────────┘          │                                         │
+│         ┌─────────────────────┼────────────────────┬────────────┐       │
+│         │                     │                    │            │       │
+│         ▼                     │                    ▼            ▼       │
+│  ┌─────────────┐              │            ┌─────────────┐ ┌─────────┐  │
+│  │   GARCLI    │              │            │   RARCLI    │ │GAR2CLI  │  │
+│  │   (Graph)   │              │            │ (Retrieval) │ │  (v2)   │  │
+│  └──────┬──────┘              │            └─────────────┘ └─────────┘  │
+│         │                     │                                         │
+│         ▼                     │                                         │
+│  ┌─────────────┐              │                                         │
+│  │   HybCLI    │              │                                         │
+│  │  (Hybrid)   │              │                                         │
+│  └─────────────┘              │                                         │
 │                               │                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1306,6 +1496,7 @@ class CLI(ABC):
 | `GARCLI` | 图谱增强推理，使用知识图谱 | `python -m dbdiag cli` |
 | `HybCLI` | 混合增强推理，GAR + 语义检索 | `python -m dbdiag cli --hyb` |
 | `RARCLI` | 检索增强推理，RAG + LLM 端到端 | `python -m dbdiag cli --rar` |
+| `GAR2CLI` | 图谱增强推理 v2，基于观察的推理 | `python -m dbdiag cli --gar2` |
 
 **HybCLI 实现**:
 
@@ -1359,7 +1550,7 @@ class WebChatSession:
         self.websocket = websocket
         self.console = Console(record=True, width=150)  # 记录输出为 HTML
         self.renderer = DiagnosisRenderer(self.console)
-        self.diagnosis_mode = config.get("web", {}).get("diagnosis_mode", "hyb")
+        self.diagnosis_mode = config.get("web", {}).get("diagnosis_mode", "gar2")
 
     async def handle_message(self, msg: dict) -> dict:
         """处理消息，返回 HTML 响应"""
@@ -1407,7 +1598,7 @@ python -m dbdiag web --host 0.0.0.0 --port 8080
 web:
   host: "127.0.0.1"      # 监听地址
   port: 8000             # 监听端口
-  diagnosis_mode: hyb    # gar/hyb/rar
+  diagnosis_mode: gar2   # gar/hyb/rar/gar2
 ```
 
 ### 4.8 DAO 数据访问层
@@ -1921,7 +2112,7 @@ recommender:
 web:
   host: "127.0.0.1"
   port: 8000
-  diagnosis_mode: hyb          # gar/hyb/rar
+  diagnosis_mode: gar2         # gar/hyb/rar/gar2
 ```
 
 ### C. CLI 命令
@@ -1944,6 +2135,9 @@ python -m dbdiag cli --rar
 
 # 启动 CLI 诊断（混合增强模式，实验性）
 python -m dbdiag cli --hyb
+
+# 启动 CLI 诊断（GAR2 模式，实验性）
+python -m dbdiag cli --gar2
 
 # 启动 Web 控制台
 python -m dbdiag web

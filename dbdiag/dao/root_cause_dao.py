@@ -10,6 +10,25 @@ from dbdiag.dao.base import BaseDAO
 class RootCauseDAO(BaseDAO):
     """根因数据访问对象"""
 
+    def get_all_with_embedding(self) -> List[Dict[str, Any]]:
+        """
+        获取所有有向量的根因
+
+        Returns:
+            包含 embedding 的根因字典列表
+        """
+        with self.get_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                SELECT
+                    root_cause_id, description, solution,
+                    ticket_count, embedding
+                FROM root_causes
+                WHERE embedding IS NOT NULL
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_description(self, root_cause_id: str) -> str:
         """
         获取根因描述文本

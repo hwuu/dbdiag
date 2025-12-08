@@ -46,6 +46,15 @@ class DiagnosisRenderer:
 ╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝       ╚═╝  ╚═╝
 """
 
+    LOGO_GAR2 = """
+██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗        ██████╗ ██████╗
+██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██╔════╝ ╚════██╗
+██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗██║  ███╗ █████╔╝
+██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██║   ██║██╔═══╝
+██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ╚██████╔╝███████╗
+╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝        ╚═════╝ ╚══════╝
+"""
+
     def __init__(self, console: Console = None):
         """初始化渲染器
 
@@ -58,7 +67,7 @@ class DiagnosisRenderer:
         """获取 LOGO
 
         Args:
-            mode: 诊断模式 (gar/hyb/rar)
+            mode: 诊断模式 (gar/hyb/rar/gar2)
 
         Returns:
             LOGO 字符串
@@ -67,6 +76,7 @@ class DiagnosisRenderer:
             "gar": self.LOGO_GAR,
             "hyb": self.LOGO_HYB,
             "rar": self.LOGO_RAR,
+            "gar2": self.LOGO_GAR2,
         }
         return logos.get(mode, self.LOGO_GAR).strip()
 
@@ -180,7 +190,7 @@ class DiagnosisRenderer:
 
             parts.append(Text(""))  # 空行
 
-        parts.append(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
+        parts.append(Text("请输入检查结果（输入格式: 1确认 2否定 或 描述新观察）。", style="bold yellow"))
 
         return Group(*parts)
 
@@ -233,7 +243,7 @@ class DiagnosisRenderer:
 
             parts.append(Text(""))  # 空行
 
-        parts.append(Text("请输入检查结果（如：1确认 2否定 3确认）。", style="bold yellow"))
+        parts.append(Text("请输入检查结果（输入格式: 1确认 2否定 或 描述新观察）。", style="bold yellow"))
 
         return Group(*parts)
 
@@ -351,6 +361,20 @@ class DiagnosisRenderer:
 - `/exit` - 退出程序
 
 直接输入问题描述或检查结果即可继续诊断。
+            """
+        elif mode == "gar2":
+            help_text = """
+**GAR2 模式可用命令：**
+- `/help` - 显示此帮助
+- `/status` - 查看当前诊断状态
+- `/reset` - 重新开始诊断
+- `/exit` - 退出程序
+
+**反馈格式：**
+- `1确认 2否定` - 确认或否认推荐的现象
+- `全否定` - 否认所有推荐的现象
+- `确认` - 确认所有推荐的现象
+- 直接描述新观察到的现象
             """
         else:
             help_text = """
