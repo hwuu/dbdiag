@@ -595,6 +595,7 @@ class GAR2CLI(CLI):
         self.dialogue_manager = GAR2DialogueManager(
             self.db_path, self.llm_service, self.embedding_service,
             progress_callback=self._print_progress,
+            match_threshold=self.config.recommender.match_threshold,
         )
 
         # DAO

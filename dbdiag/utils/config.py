@@ -49,6 +49,8 @@ class RecommenderConfig(BaseModel):
     recommend_top_n: int = 5  # 推荐 top-n 现象
     # 假设追踪
     hypothesis_top_k: int = 5  # 追踪 top-k 假设
+    # 匹配阈值
+    match_threshold: float = 0.75  # 观察匹配阈值，低于此值视为未匹配
     # 置信度阈值
     high_confidence_threshold: float = 0.80  # 高置信度阈值，达到后确认根因
     medium_confidence_threshold: float = 0.50  # 中等置信度阈值

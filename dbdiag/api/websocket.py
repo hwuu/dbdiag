@@ -119,6 +119,7 @@ class WebChatSession:
                     self._llm_service,
                     self._embedding_service,
                     progress_callback=self._on_progress,
+                    match_threshold=self._app_config.recommender.match_threshold,
                 )
             else:
                 hybrid_mode = self.diagnosis_mode == "hyb"

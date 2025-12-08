@@ -47,6 +47,7 @@ class GAR2DialogueManager:
         llm_service: LLMService,
         embedding_service: EmbeddingService,
         progress_callback: Optional[Callable[[str], None]] = None,
+        match_threshold: float = 0.75,
     ):
         """初始化
 
@@ -55,6 +56,7 @@ class GAR2DialogueManager:
             llm_service: LLM 服务
             embedding_service: Embedding 服务
             progress_callback: 进度回调函数
+            match_threshold: 观察匹配阈值
         """
         self.db_path = db_path
         self.llm_service = llm_service
@@ -63,7 +65,9 @@ class GAR2DialogueManager:
 
         # 子模块
         self.input_analyzer = InputAnalyzer(llm_service)
-        self.observation_matcher = ObservationMatcher(db_path, embedding_service)
+        self.observation_matcher = ObservationMatcher(
+            db_path, embedding_service, match_threshold=match_threshold
+        )
         self.confidence_calculator = ConfidenceCalculator(db_path)
 
         # DAO
