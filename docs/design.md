@@ -1406,16 +1406,79 @@ def calculate_with_match_result(symptom, match_result) -> List[HypothesisV2]:
         contribution = tm.score * TICKET_WEIGHT
         root_cause_scores[tm.root_cause_id] += contribution
 
-    # 4. 加上 symptom 中已确认观察的贡献
+    # 4. 加上 symptom 中已确认观察的贡献（跳过已处理的现象，避免重复计算）
     for obs in symptom.observations:
-        if obs.matched_phenomenon_id:
-            # 同样按 PHENOMENON_WEIGHT=0.5 计算
+        if obs.matched_phenomenon_id and obs.matched_phenomenon_id not in processed:
+            contribution = obs.match_score * phenomenon_weight * PHENOMENON_WEIGHT
             ...
 
-    # 5. 归一化
+    # 5. 归一化（方案 B 改进版）
     for root_cause_id, raw_score in root_cause_scores.items():
-        confidence = raw_score / len(all_phenomena_for_root_cause)
+        # 5.1 根据已确认现象找到最匹配的工单
+        confirmed_phenomena = root_cause_phenomena[root_cause_id]
+        best_ticket = get_best_ticket_by_phenomena(confirmed_phenomena, root_cause_id)
+
+        if best_ticket:
+            # 使用工单的现象数
+            phenomena_count = get_phenomena_count_by_ticket_id(best_ticket)
+        else:
+            # 兜底：使用根因的所有现象数
+            phenomena_count = len(all_phenomena_for_root_cause)
+
+        # 5.2 归一化因子需要乘以权重（因为贡献分数乘了权重）
+        normalization = phenomena_count * PHENOMENON_WEIGHT
+
+        # 5.3 计算置信度
+        confidence = min(raw_score / normalization, 1.0)
 ```
+
+**归一化因子策略详解**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Normalization Factor Selection                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  User confirmed phenomena: {P-0001, P-0002}                                  │
+│  Root cause: RC-0001                                                         │
+│                                                                              │
+│  Step 1: Find best matching ticket by confirmed phenomena                    │
+│          ┌─────────────────────────────────────────────────────────────────┐ │
+│          │ SELECT ticket_id, COUNT(*) as match_count                       │ │
+│          │ FROM ticket_phenomena tp                                        │ │
+│          │ JOIN tickets t ON tp.ticket_id = t.ticket_id                    │ │
+│          │ WHERE t.root_cause_id = 'RC-0001'                               │ │
+│          │   AND tp.phenomenon_id IN ('P-0001', 'P-0002')                  │ │
+│          │ GROUP BY ticket_id ORDER BY match_count DESC                    │ │
+│          └─────────────────────────────────────────────────────────────────┘ │
+│          Result: T-0001 (contains P-0001, P-0002, P-0003, P-0004)           │
+│                                                                              │
+│  Step 2: Get phenomena count of best ticket                                  │
+│          T-0001 has 4 phenomena → phenomena_count = 4                        │
+│                                                                              │
+│  Step 3: Calculate normalization factor                                      │
+│          normalization = phenomena_count × PHENOMENON_WEIGHT                 │
+│                        = 4 × 0.5 = 2.0                                       │
+│                                                                              │
+│  Step 4: Calculate confidence                                                │
+│          raw_score = (P-0001 contribution) + (P-0002 contribution)           │
+│                    = 1.0 × 0.5 + 1.0 × 0.5 = 1.0                            │
+│          confidence = raw_score / normalization = 1.0 / 2.0 = 50%            │
+│                                                                              │
+│  If user confirms all 4 phenomena:                                           │
+│          raw_score = 4 × 1.0 × 0.5 = 2.0                                     │
+│          confidence = 2.0 / 2.0 = 100%  ✓                                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**关键设计决策**：
+
+1. **归一化因子乘以权重**：由于每个现象的贡献都乘以了 `PHENOMENON_WEIGHT=0.5`，归一化因子也必须乘以这个权重，否则即使确认全部现象也无法达到 100% 置信度。
+
+2. **基于已确认现象选择工单**：不使用 embedding 相似度选择工单（可能选中不相关的工单），而是查找包含最多已确认现象的工单，这样归一化因子更准确。
+
+3. **避免重复计算**：`match_result.phenomena` 和 `symptom.observations` 可能包含相同的现象，需要跳过已处理的现象。
 
 **与 GAR 对比**：
 

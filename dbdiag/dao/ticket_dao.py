@@ -194,6 +194,64 @@ class TicketPhenomenonDAO(BaseDAO):
             )
             return {row[0] for row in cursor.fetchall()}
 
+    def get_phenomena_count_by_ticket_id(self, ticket_id: str) -> int:
+        """
+        获取某个工单包含的现象数量
+
+        Args:
+            ticket_id: 工单 ID
+
+        Returns:
+            现象数量
+        """
+        with self.get_cursor(row_factory=False) as (conn, cursor):
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT phenomenon_id)
+                FROM ticket_phenomena
+                WHERE ticket_id = ?
+                """,
+                (ticket_id,),
+            )
+            return cursor.fetchone()[0]
+
+    def get_best_ticket_by_phenomena(
+        self, phenomenon_ids: Set[str], root_cause_id: str
+    ) -> Optional[str]:
+        """
+        根据已确认现象找到最匹配的工单
+
+        找到包含最多已确认现象的工单，用于确定归一化因子。
+
+        Args:
+            phenomenon_ids: 已确认的现象 ID 集合
+            root_cause_id: 目标根因 ID
+
+        Returns:
+            最匹配的工单 ID，如果没有匹配则返回 None
+        """
+        if not phenomenon_ids:
+            return None
+
+        with self.get_cursor(row_factory=False) as (conn, cursor):
+            # 查找该根因下包含已确认现象最多的工单
+            placeholders = ",".join("?" * len(phenomenon_ids))
+            cursor.execute(
+                f"""
+                SELECT tp.ticket_id, COUNT(DISTINCT tp.phenomenon_id) as match_count
+                FROM ticket_phenomena tp
+                JOIN tickets t ON tp.ticket_id = t.ticket_id
+                WHERE t.root_cause_id = ?
+                  AND tp.phenomenon_id IN ({placeholders})
+                GROUP BY tp.ticket_id
+                ORDER BY match_count DESC
+                LIMIT 1
+                """,
+                (root_cause_id, *phenomenon_ids),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
 
 class PhenomenonRootCauseDAO(BaseDAO):
     """现象-根因关联数据访问对象"""
