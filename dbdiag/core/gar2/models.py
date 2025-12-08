@@ -7,6 +7,8 @@
 - SessionStateV2: 会话状态
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from typing import List, Optional, Set, Literal
 
@@ -61,7 +63,7 @@ class Symptom(BaseModel):
         source: Literal["user_input", "confirmed"],
         matched_phenomenon_id: Optional[str] = None,
         match_score: float = 0.0,
-    ) -> Observation:
+    ) -> Optional[Observation]:
         """添加观察
 
         Args:
@@ -71,8 +73,13 @@ class Symptom(BaseModel):
             match_score: 匹配度
 
         Returns:
-            创建的 Observation 对象
+            创建的 Observation 对象，如果重复则返回 None
         """
+        # 去重：检查是否已存在相同描述的观察
+        for obs in self.observations:
+            if obs.description == description:
+                return None  # 已存在，跳过
+
         obs = Observation(
             id=f"obs-{self._next_obs_id:03d}",
             description=description,
@@ -189,6 +196,7 @@ class SessionStateV2(BaseModel):
         hypotheses: 根因假设列表（按置信度排序）
         recommended_phenomenon_ids: 当前推荐的现象 ID 列表
         turn_count: 轮次计数
+        accumulated_match_result: 累积的多目标匹配结果
     """
 
     session_id: str
@@ -197,6 +205,7 @@ class SessionStateV2(BaseModel):
     hypotheses: List[HypothesisV2] = Field(default_factory=list)
     recommended_phenomenon_ids: List[str] = Field(default_factory=list)
     turn_count: int = 0
+    accumulated_match_result: Optional["MatchResult"] = None
 
     @property
     def top_hypothesis(self) -> Optional[HypothesisV2]:
@@ -260,3 +269,30 @@ class MatchResult(BaseModel):
     def has_matches(self) -> bool:
         """是否有任何匹配结果"""
         return bool(self.phenomena or self.root_causes or self.tickets)
+
+    def merge(self, other: "MatchResult") -> None:
+        """合并另一个 MatchResult（去重，保留更高分数）
+
+        Args:
+            other: 要合并的 MatchResult
+        """
+        # 合并 phenomena（按 phenomenon_id 去重，保留更高分数）
+        existing_phenomena = {p.phenomenon_id: p for p in self.phenomena}
+        for p in other.phenomena:
+            if p.phenomenon_id not in existing_phenomena or p.score > existing_phenomena[p.phenomenon_id].score:
+                existing_phenomena[p.phenomenon_id] = p
+        self.phenomena = list(existing_phenomena.values())
+
+        # 合并 root_causes（按 root_cause_id 去重，保留更高分数）
+        existing_rc = {r.root_cause_id: r for r in self.root_causes}
+        for r in other.root_causes:
+            if r.root_cause_id not in existing_rc or r.score > existing_rc[r.root_cause_id].score:
+                existing_rc[r.root_cause_id] = r
+        self.root_causes = list(existing_rc.values())
+
+        # 合并 tickets（按 ticket_id 去重，保留更高分数）
+        existing_tickets = {t.ticket_id: t for t in self.tickets}
+        for t in other.tickets:
+            if t.ticket_id not in existing_tickets or t.score > existing_tickets[t.ticket_id].score:
+                existing_tickets[t.ticket_id] = t
+        self.tickets = list(existing_tickets.values())

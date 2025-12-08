@@ -211,11 +211,17 @@ new_observations: 用户描述的、不在待确认列表中的新观察。只�
 
             new_observations = result.get("new_observations", [])
 
-            return SymptomDelta(
+            delta = SymptomDelta(
                 confirmations=confirmations,
                 denials=denials,
                 new_observations=new_observations,
             )
+
+            # 兜底：如果解析结果为空，把原始输入作为新观察
+            if delta.is_empty:
+                return SymptomDelta(new_observations=[user_input])
+
+            return delta
 
         except Exception:
             # LLM 失败，作为新观察

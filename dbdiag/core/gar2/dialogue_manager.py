@@ -100,6 +100,7 @@ class GAR2DialogueManager:
         self.session.turn_count = 1
 
         self._report_progress("分析问题描述...")
+        self._report_progress("[DEBUG] 第一轮，走 _process_new_observations 分支")
 
         # 将用户问题作为初始观察处理
         return self._process_new_observations([user_problem])
@@ -120,6 +121,9 @@ class GAR2DialogueManager:
 
         # 1. 解析用户输入
         self._report_progress("解析用户反馈...")
+        # DEBUG: 显示当前推荐列表
+        self._report_progress(f"[DEBUG] 当前推荐列表: {self.session.recommended_phenomenon_ids}")
+
         phenomenon_descriptions = self._get_phenomenon_descriptions(
             self.session.recommended_phenomenon_ids
         )
@@ -128,6 +132,9 @@ class GAR2DialogueManager:
             self.session.recommended_phenomenon_ids,
             phenomenon_descriptions,
         )
+
+        # DEBUG: 显示解析结果
+        self._report_progress(f"[DEBUG] 解析结果: confirmations={delta.confirmations}, denials={delta.denials}, new_obs={delta.new_observations}")
 
         # 2. 处理确认
         for phenomenon_id in delta.confirmations:
@@ -139,9 +146,11 @@ class GAR2DialogueManager:
 
         # 4. 处理新观察
         if delta.new_observations:
+            self._report_progress("[DEBUG] 走 _process_new_observations 分支")
             return self._process_new_observations(delta.new_observations)
 
         # 5. 如果没有新观察，重新计算置信度并决策
+        self._report_progress("[DEBUG] 走 _calculate_and_decide 分支（无 match_result）")
         return self._calculate_and_decide()
 
     def _handle_confirmation(self, phenomenon_id: str) -> None:
@@ -175,12 +184,14 @@ class GAR2DialogueManager:
 
         1. 多目标匹配（phenomena, root_causes, tickets）
         2. 添加到症状
-        3. 计算置信度并决策
+        3. 累积 match_result 到 session
+        4. 计算置信度并决策
         """
         self._report_progress("匹配观察到现象、根因、工单...")
 
-        # 聚合所有观察的匹配结果
+        # 聚合本轮所有观察的匹配结果
         aggregated_match = MatchResult()
+        has_new_observation = False
 
         for obs_text in observations:
             match_result = self.observation_matcher.match_all(obs_text)
@@ -193,56 +204,88 @@ class GAR2DialogueManager:
             # 基于最佳现象匹配添加到症状
             best_phenomenon = match_result.best_phenomenon
             if best_phenomenon:
-                self.session.symptom.add_observation(
+                added = self.session.symptom.add_observation(
                     description=obs_text,
                     source="user_input",
                     matched_phenomenon_id=best_phenomenon.phenomenon_id,
                     match_score=best_phenomenon.score,
                 )
-                self._report_progress(
-                    f"匹配成功: {obs_text[:20]}... → {best_phenomenon.phenomenon_id} ({best_phenomenon.score:.0%})"
-                )
-                # 报告其他匹配
-                if match_result.root_causes:
-                    self._report_progress(f"  直接匹配根因: {len(match_result.root_causes)} 个")
-                if match_result.tickets:
-                    self._report_progress(f"  相似工单: {len(match_result.tickets)} 个")
+                if added:
+                    has_new_observation = True
+                    self._report_progress(
+                        f"匹配成功: {obs_text[:20]}... → {best_phenomenon.phenomenon_id} ({best_phenomenon.score:.0%})"
+                    )
+                    # 报告其他匹配
+                    if match_result.root_causes:
+                        self._report_progress(f"  直接匹配根因: {len(match_result.root_causes)} 个")
+                    if match_result.tickets:
+                        self._report_progress(f"  相似工单: {len(match_result.tickets)} 个")
+                else:
+                    self._report_progress(f"[DEBUG] 跳过重复观察: {obs_text[:30]}...")
             else:
                 # 未匹配现象，但可能有根因或工单匹配
-                self.session.symptom.add_observation(
+                added = self.session.symptom.add_observation(
                     description=obs_text,
                     source="user_input",
                 )
-                if match_result.root_causes or match_result.tickets:
-                    self._report_progress(
-                        f"未匹配现象，但匹配到 {len(match_result.root_causes)} 个根因, {len(match_result.tickets)} 个工单"
-                    )
+                if added:
+                    has_new_observation = True
+                    if match_result.root_causes or match_result.tickets:
+                        self._report_progress(
+                            f"未匹配现象，但匹配到 {len(match_result.root_causes)} 个根因, {len(match_result.tickets)} 个工单"
+                        )
+                    else:
+                        self._report_progress(f"未找到匹配: {obs_text[:30]}...")
                 else:
-                    self._report_progress(f"未找到匹配: {obs_text[:30]}...")
+                    self._report_progress(f"[DEBUG] 跳过重复观察: {obs_text[:30]}...")
 
-        return self._calculate_and_decide(aggregated_match)
+        # 累积 match_result 到 session
+        if has_new_observation and aggregated_match.has_matches:
+            if self.session.accumulated_match_result is None:
+                self.session.accumulated_match_result = aggregated_match
+            else:
+                self.session.accumulated_match_result.merge(aggregated_match)
+            self._report_progress(
+                f"[DEBUG] 累积 match_result: phenomena={len(self.session.accumulated_match_result.phenomena)}, "
+                f"root_causes={len(self.session.accumulated_match_result.root_causes)}, "
+                f"tickets={len(self.session.accumulated_match_result.tickets)}"
+            )
 
-    def _calculate_and_decide(
-        self, match_result: Optional[MatchResult] = None
-    ) -> Dict[str, Any]:
+        return self._calculate_and_decide()
+
+    def _calculate_and_decide(self) -> Dict[str, Any]:
         """计算置信度并做出决策
 
-        Args:
-            match_result: 多目标匹配结果，用于新观察的置信度计算
+        使用 session.accumulated_match_result 计算置信度。
         """
         self._report_progress("计算根因置信度...")
 
-        # 计算置信度
+        # 使用累积的 match_result
+        match_result = self.session.accumulated_match_result
+
+        # DEBUG: 显示 match_result 状态
         if match_result and match_result.has_matches:
-            # 使用多目标匹配结果计算置信度
+            self._report_progress(
+                f"[DEBUG] 使用累积的 match_result: phenomena={len(match_result.phenomena)}, "
+                f"root_causes={len(match_result.root_causes)}, tickets={len(match_result.tickets)}"
+            )
+            self._report_progress("[DEBUG] 使用 calculate_with_match_result()")
             self.session.hypotheses = self.confidence_calculator.calculate_with_match_result(
                 self.session.symptom, match_result
             )
         else:
-            # 仅基于 symptom 中的观察计算
+            self._report_progress("[DEBUG] 无累积 match_result，仅基于 symptom 计算")
+            self._report_progress("[DEBUG] 使用 calculate() - 仅基于 symptom")
             self.session.hypotheses = self.confidence_calculator.calculate(
                 self.session.symptom
             )
+
+        # DEBUG: 显示 top 假设
+        if self.session.hypotheses:
+            top3 = self.session.hypotheses[:3]
+            for i, h in enumerate(top3, 1):
+                desc = self._root_cause_dao.get_description(h.root_cause_id)
+                self._report_progress(f"[DEBUG] Top{i}: {h.confidence:.0%} {h.root_cause_id} ({desc[:20]}...)")
 
         top = self.session.top_hypothesis
 
