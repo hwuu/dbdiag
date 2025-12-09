@@ -41,7 +41,8 @@
 #   DB_PATH: 数据库文件完整路径
 #   DATA_DIR: 数据目录路径（数据库默认为 DATA_DIR/tickets.db）
 
-FROM python:3.11-slim
+#FROM python:3.11-slim
+FROM crpi-123cnbgmjz0ihmia.cn-beijing.personal.cr.aliyuncs.com/hwuu00_mirror/python:3.11-slim
 
 WORKDIR /app
 
