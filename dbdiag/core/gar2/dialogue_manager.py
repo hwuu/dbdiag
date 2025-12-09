@@ -3,11 +3,13 @@
 基于观察的诊断推理对话管理器。
 
 主流程：
-1. InputAnalyzer 解析用户输入 → SymptomDelta
-2. ObservationMatcher 匹配新观察 → phenomenon_id, match_score
-3. Symptom 更新观察列表 / 阻塞列表
-4. ConfidenceCalculator 图传播 → 根因置信度
-5. 决策：高置信度 → 诊断 | 否则 → 推荐现象
+1. IntentClassifier 识别用户意图 → UserIntent
+2. 根据意图类型分发：
+   - feedback: ObservationMatcher 匹配 → 更新 Symptom → 计算置信度
+   - query: 生成状态总结响应
+   - mixed: 先处理 feedback，再生成 query 响应
+3. ConfidenceCalculator 图传播 → 根因置信度
+4. 决策：高置信度 → 诊断 | 否则 → 推荐现象
 """
 
 import uuid
@@ -20,10 +22,11 @@ from dbdiag.core.gar2.models import (
     SessionStateV2,
     MatchResult,
 )
-from dbdiag.core.gar2.input_analyzer import InputAnalyzer, SymptomDelta
 from dbdiag.core.gar2.observation_matcher import ObservationMatcher
 from dbdiag.core.gar2.confidence_calculator import ConfidenceCalculator
-from dbdiag.dao import PhenomenonDAO, PhenomenonRootCauseDAO, RootCauseDAO
+from dbdiag.core.intent import IntentClassifier, UserIntent, QueryType
+from dbdiag.core.intent.models import IntentType
+from dbdiag.dao import PhenomenonDAO, PhenomenonRootCauseDAO, RootCauseDAO, TicketDAO
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 
@@ -35,7 +38,7 @@ class GAR2DialogueManager:
     """
 
     # 置信度阈值
-    HIGH_CONFIDENCE_THRESHOLD = 0.80
+    HIGH_CONFIDENCE_THRESHOLD = 0.95
     MEDIUM_CONFIDENCE_THRESHOLD = 0.50
 
     # 推荐数量
@@ -64,7 +67,7 @@ class GAR2DialogueManager:
         self._progress_callback = progress_callback
 
         # 子模块
-        self.input_analyzer = InputAnalyzer(llm_service)
+        self.intent_classifier = IntentClassifier(llm_service)
         self.observation_matcher = ObservationMatcher(
             db_path, embedding_service, match_threshold=match_threshold
         )
@@ -74,6 +77,7 @@ class GAR2DialogueManager:
         self._phenomenon_dao = PhenomenonDAO(db_path)
         self._phenomenon_root_cause_dao = PhenomenonRootCauseDAO(db_path)
         self._root_cause_dao = RootCauseDAO(db_path)
+        self._ticket_dao = TicketDAO(db_path)
 
         # 当前会话
         self.session: Optional[SessionStateV2] = None
@@ -83,11 +87,11 @@ class GAR2DialogueManager:
         if self._progress_callback:
             self._progress_callback(message)
 
-    def start_conversation(self, user_problem: str) -> Dict[str, Any]:
+    def start_conversation(self, user_input: str) -> Dict[str, Any]:
         """开始新对话
 
         Args:
-            user_problem: 用户问题描述
+            user_input: 用户输入
 
         Returns:
             响应字典
@@ -95,15 +99,53 @@ class GAR2DialogueManager:
         # 创建新会话
         self.session = SessionStateV2(
             session_id=str(uuid.uuid4()),
-            user_problem=user_problem,
+            user_problem="",  # 稍后根据意图设置
         )
         self.session.turn_count = 1
 
-        self._report_progress("分析问题描述...")
-        self._report_progress("[DEBUG] 第一轮，走 _process_new_observations 分支")
+        self._report_progress("分析用户输入...")
 
-        # 将用户问题作为初始观察处理
-        return self._process_new_observations([user_problem])
+        # 意图分类（第一轮没有推荐现象）
+        intent = self.intent_classifier.classify(user_input)
+
+        self._report_progress(
+            f"[DEBUG] 第一轮意图: type={intent.intent_type.value}, "
+            f"new_obs={intent.new_observations}, query={intent.query_type}"
+        )
+
+        # 1. 纯查询意图：引导用户描述问题
+        if intent.intent_type == IntentType.QUERY:
+            return self._guide_to_describe_problem(
+                "尚未开始诊断。请描述您遇到的数据库问题，例如：查询变慢、连接超时等。"
+            )
+
+        # 2. feedback/mixed 意图：检查是否有实质内容
+        has_observations = bool(intent.new_observations)
+
+        if not has_observations:
+            # 没有实质观察内容，引导用户
+            return self._guide_to_describe_problem(
+                "请描述您遇到的具体问题或观察到的现象。\n"
+                "例如：\n"
+                "- \"查询变慢，原来几秒现在要半分钟\"\n"
+                "- \"数据库连接经常超时\"\n"
+                "- \"CPU 使用率很高\""
+            )
+
+        # 3. 有实质观察内容，正常处理
+        # 记录用户问题（取第一个观察作为主问题）
+        self.session.user_problem = intent.new_observations[0]
+
+        self._report_progress("[DEBUG] 有效输入，走 _process_new_observations 分支")
+        return self._process_new_observations(intent.new_observations)
+
+    def _guide_to_describe_problem(self, message: str) -> Dict[str, Any]:
+        """返回引导用户描述问题的响应"""
+        return {
+            "action": "guide",
+            "message": message,
+            "session": self.session,
+        }
 
     def continue_conversation(self, user_message: str) -> Dict[str, Any]:
         """继续对话
@@ -119,39 +161,52 @@ class GAR2DialogueManager:
 
         self.session.turn_count += 1
 
-        # 1. 解析用户输入
-        self._report_progress("解析用户反馈...")
-        # DEBUG: 显示当前推荐列表
+        # 1. 意图分类
+        self._report_progress("解析用户意图...")
         self._report_progress(f"[DEBUG] 当前推荐列表: {self.session.recommended_phenomenon_ids}")
 
         phenomenon_descriptions = self._get_phenomenon_descriptions(
             self.session.recommended_phenomenon_ids
         )
-        delta = self.input_analyzer.analyze(
+        intent = self.intent_classifier.classify(
             user_message,
             self.session.recommended_phenomenon_ids,
             phenomenon_descriptions,
         )
 
-        # DEBUG: 显示解析结果
-        self._report_progress(f"[DEBUG] 解析结果: confirmations={delta.confirmations}, denials={delta.denials}, new_obs={delta.new_observations}")
+        self._report_progress(
+            f"[DEBUG] 意图: type={intent.intent_type.value}, "
+            f"confirmations={intent.confirmations}, denials={intent.denials}, "
+            f"new_obs={intent.new_observations}, query={intent.query_type}"
+        )
 
-        # 2. 处理确认
-        for phenomenon_id in delta.confirmations:
+        # 2. 根据意图类型路由
+        if intent.intent_type == IntentType.QUERY:
+            # 纯查询：直接返回状态总结
+            return self._generate_summary_response(intent.query_type)
+
+        # 3. 处理反馈（FEEDBACK 或 MIXED）
+        for phenomenon_id in intent.confirmations:
             self._handle_confirmation(phenomenon_id)
 
-        # 3. 处理否认
-        for phenomenon_id in delta.denials:
+        for phenomenon_id in intent.denials:
             self._handle_denial(phenomenon_id)
 
         # 4. 处理新观察
-        if delta.new_observations:
+        if intent.new_observations:
             self._report_progress("[DEBUG] 走 _process_new_observations 分支")
-            return self._process_new_observations(delta.new_observations)
+            result = self._process_new_observations(intent.new_observations)
+        else:
+            # 没有新观察，重新计算置信度并决策
+            self._report_progress("[DEBUG] 走 _calculate_and_decide 分支")
+            result = self._calculate_and_decide()
 
-        # 5. 如果没有新观察，重新计算置信度并决策
-        self._report_progress("[DEBUG] 走 _calculate_and_decide 分支（无 match_result）")
-        return self._calculate_and_decide()
+        # 5. MIXED 意图：附加查询响应
+        if intent.intent_type == IntentType.MIXED and intent.query_type:
+            summary = self._generate_summary_response(intent.query_type)
+            result["query_response"] = summary
+
+        return result
 
     def _handle_confirmation(self, phenomenon_id: str) -> None:
         """处理现象确认
@@ -184,25 +239,30 @@ class GAR2DialogueManager:
 
         1. 多目标匹配（phenomena, root_causes, tickets）
         2. 添加到症状
-        3. 累积 match_result 到 session
+        3. 累积 match_result 到 session（只累积 best 匹配）
         4. 计算置信度并决策
         """
         self._report_progress("匹配观察到现象、根因、工单...")
 
-        # 聚合本轮所有观察的匹配结果
+        # 聚合本轮所有观察的匹配结果（只保留 best 匹配）
         aggregated_match = MatchResult()
         has_new_observation = False
 
         for obs_text in observations:
             match_result = self.observation_matcher.match_all(obs_text)
 
-            # 聚合匹配结果
-            aggregated_match.phenomena.extend(match_result.phenomena)
-            aggregated_match.root_causes.extend(match_result.root_causes)
-            aggregated_match.tickets.extend(match_result.tickets)
+            # 只聚合 best 匹配，不聚合 top-5 的所有匹配
+            best_phenomenon = match_result.best_phenomenon
+            if best_phenomenon:
+                aggregated_match.phenomena.append(best_phenomenon)
+
+            # root_cause 和 ticket 也只取 best（去重在 calculator 中处理）
+            if match_result.root_causes:
+                aggregated_match.root_causes.append(match_result.root_causes[0])
+            if match_result.tickets:
+                aggregated_match.tickets.append(match_result.tickets[0])
 
             # 基于最佳现象匹配添加到症状
-            best_phenomenon = match_result.best_phenomenon
             if best_phenomenon:
                 added = self.session.symptom.add_observation(
                     description=obs_text,
@@ -271,7 +331,8 @@ class GAR2DialogueManager:
             )
             self._report_progress("[DEBUG] 使用 calculate_with_match_result()")
             self.session.hypotheses = self.confidence_calculator.calculate_with_match_result(
-                self.session.symptom, match_result
+                self.session.symptom, match_result,
+                debug_callback=self._report_progress
             )
         else:
             self._report_progress("[DEBUG] 无累积 match_result，仅基于 symptom 计算")
@@ -301,24 +362,157 @@ class GAR2DialogueManager:
         return self._generate_recommendation()
 
     def _generate_diagnosis(self, hypothesis: HypothesisV2) -> Dict[str, Any]:
-        """生成诊断结果"""
-        root_cause = self._root_cause_dao.get_by_id(hypothesis.root_cause_id)
+        """生成诊断结果
 
-        # 收集观察到的现象
+        包含：
+        - 根因信息
+        - 观察到的现象
+        - 未确认的现象（需进一步确认）
+        - 推导过程（LLM 生成）
+        - 参考工单列表
+        """
+        root_cause = self._root_cause_dao.get_by_id(hypothesis.root_cause_id)
+        root_cause_desc = root_cause.get("description", hypothesis.root_cause_id) if root_cause else hypothesis.root_cause_id
+
+        # 1. 收集观察到的现象（带描述）
         observed_phenomena = []
+        observed_phenomenon_ids = set()
         for obs in self.session.symptom.observations:
             if obs.matched_phenomenon_id in hypothesis.contributing_phenomena:
-                observed_phenomena.append(obs.description)
+                observed_phenomena.append({
+                    "phenomenon_id": obs.matched_phenomenon_id,
+                    "description": obs.description,
+                })
+                observed_phenomenon_ids.add(obs.matched_phenomenon_id)
+
+        # 2. 获取未确认的现象
+        all_related_phenomena = self._phenomenon_root_cause_dao.get_phenomena_by_root_cause_id(
+            hypothesis.root_cause_id
+        )
+        unconfirmed_phenomena = []
+        for pid in all_related_phenomena:
+            if pid not in observed_phenomenon_ids:
+                phenomenon = self._get_phenomenon_by_id(pid)
+                if phenomenon:
+                    unconfirmed_phenomena.append({
+                        "phenomenon_id": pid,
+                        "description": phenomenon.get("description", pid),
+                        "observation_method": phenomenon.get("observation_method", ""),
+                    })
+
+        # 3. LLM 生成推导过程
+        reasoning = self._generate_reasoning(
+            root_cause_desc,
+            [p["description"] for p in observed_phenomena],
+        )
+
+        # 4. 获取参考工单（按匹配度排序）
+        supporting_tickets = self._get_supporting_tickets(
+            hypothesis.root_cause_id,
+            observed_phenomenon_ids,
+        )
 
         return {
             "action": "diagnose",
             "root_cause_id": hypothesis.root_cause_id,
-            "root_cause": root_cause.get("description", hypothesis.root_cause_id) if root_cause else hypothesis.root_cause_id,
+            "root_cause": root_cause_desc,
             "confidence": hypothesis.confidence,
             "observed_phenomena": observed_phenomena,
+            "unconfirmed_phenomena": unconfirmed_phenomena,
+            "reasoning": reasoning,
+            "supporting_tickets": supporting_tickets,
             "solution": root_cause.get("solution", "") if root_cause else "",
             "session": self.session,
         }
+
+    def _generate_reasoning(
+        self,
+        root_cause: str,
+        observed_phenomena: List[str],
+    ) -> str:
+        """使用 LLM 生成推导过程
+
+        Args:
+            root_cause: 根因描述
+            observed_phenomena: 观察到的现象描述列表
+
+        Returns:
+            推导过程文本
+        """
+        if not observed_phenomena:
+            return "无法生成推导过程：缺少观察到的现象。"
+
+        prompt = f"""根据以下观察到的现象，解释为什么可以推导出根因。
+
+## 观察到的现象
+{chr(10).join(f"- {p}" for p in observed_phenomena)}
+
+## 根因
+{root_cause}
+
+## 要求
+1. 简洁说明现象之间的关联
+2. 解释这些现象如何指向根因
+3. 使用 2-3 句话，不超过 100 字
+
+直接输出推导过程，不要其他内容。"""
+
+        try:
+            return self.llm_service.generate_simple(prompt)
+        except Exception:
+            # LLM 失败时返回默认推导
+            return f"根据观察到的 {len(observed_phenomena)} 个现象，综合判断根因为：{root_cause}"
+
+    def _get_supporting_tickets(
+        self,
+        root_cause_id: str,
+        observed_phenomenon_ids: set,
+    ) -> List[Dict[str, Any]]:
+        """获取参考工单列表
+
+        按与已确认现象的匹配度排序。
+
+        Args:
+            root_cause_id: 根因 ID
+            observed_phenomenon_ids: 已确认的现象 ID 集合
+
+        Returns:
+            工单列表，包含 ticket_id, description, match_count
+        """
+        # 获取该根因的所有工单
+        tickets = self._ticket_dao.get_by_root_cause_id(root_cause_id, limit=100)
+
+        if not tickets or not observed_phenomenon_ids:
+            return tickets[:5] if tickets else []
+
+        # 计算每个工单与已确认现象的匹配数
+        from dbdiag.dao import TicketPhenomenonDAO
+        ticket_phenomenon_dao = TicketPhenomenonDAO(self.db_path)
+
+        ticket_matches = []
+        for ticket in tickets:
+            ticket_id = ticket["ticket_id"]
+            # 获取工单包含的现象
+            ticket_phenomena = ticket_phenomenon_dao.get_ticket_phenomena_by_phenomenon
+            # 简化：直接查询该工单包含多少已确认现象
+            match_count = 0
+            for pid in observed_phenomenon_ids:
+                associations = ticket_phenomenon_dao.get_ticket_phenomena_by_phenomenon(pid)
+                for assoc in associations:
+                    if assoc["ticket_id"] == ticket_id:
+                        match_count += 1
+                        break
+
+            ticket_matches.append({
+                "ticket_id": ticket_id,
+                "description": ticket.get("description", ""),
+                "match_count": match_count,
+            })
+
+        # 按匹配数排序
+        ticket_matches.sort(key=lambda x: x["match_count"], reverse=True)
+
+        return ticket_matches
 
     def _generate_recommendation(self) -> Dict[str, Any]:
         """生成推荐现象"""
@@ -375,6 +569,93 @@ class GAR2DialogueManager:
         return {
             "action": "ask_more_info",
             "message": "请提供更多关于问题的详细信息。",
+            "session": self.session,
+        }
+
+    def _generate_summary_response(self, query_type: QueryType) -> Dict[str, Any]:
+        """生成状态总结响应
+
+        根据查询类型返回不同的总结信息。
+
+        Args:
+            query_type: 查询类型
+
+        Returns:
+            响应字典
+        """
+        if query_type == QueryType.PROGRESS:
+            # 查询诊断进展
+            observations = self.session.symptom.observations
+            matched_phenomena = self.session.symptom.get_matched_phenomenon_ids()
+            blocked_phenomena = list(self.session.symptom.blocked_phenomenon_ids)
+
+            return {
+                "action": "summary",
+                "query_type": "progress",
+                "turn_count": self.session.turn_count,
+                "observations_count": len(observations),
+                "observations": [obs.description for obs in observations],
+                "matched_phenomena_count": len(matched_phenomena),
+                "matched_phenomena": list(matched_phenomena),
+                "blocked_phenomena_count": len(blocked_phenomena),
+                "blocked_phenomena": blocked_phenomena,
+                "hypotheses_count": len(self.session.hypotheses),
+                "session": self.session,
+            }
+
+        elif query_type == QueryType.CONCLUSION:
+            # 查询当前结论
+            top = self.session.top_hypothesis
+            if top and top.confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
+                root_cause = self._root_cause_dao.get_by_id(top.root_cause_id)
+                return {
+                    "action": "summary",
+                    "query_type": "conclusion",
+                    "has_conclusion": True,
+                    "root_cause_id": top.root_cause_id,
+                    "root_cause": root_cause.get("description", top.root_cause_id) if root_cause else top.root_cause_id,
+                    "confidence": top.confidence,
+                    "confidence_level": "high" if top.confidence >= self.HIGH_CONFIDENCE_THRESHOLD else "medium",
+                    "session": self.session,
+                }
+            else:
+                return {
+                    "action": "summary",
+                    "query_type": "conclusion",
+                    "has_conclusion": False,
+                    "message": "当前信息不足，尚无明确结论。请继续提供更多观察信息。",
+                    "top_hypothesis": {
+                        "root_cause_id": top.root_cause_id,
+                        "confidence": top.confidence,
+                    } if top else None,
+                    "session": self.session,
+                }
+
+        elif query_type == QueryType.HYPOTHESES:
+            # 查询假设列表
+            hypotheses_info = []
+            for hyp in self.session.hypotheses[:5]:  # Top 5
+                root_cause = self._root_cause_dao.get_by_id(hyp.root_cause_id)
+                hypotheses_info.append({
+                    "root_cause_id": hyp.root_cause_id,
+                    "description": root_cause.get("description", hyp.root_cause_id) if root_cause else hyp.root_cause_id,
+                    "confidence": hyp.confidence,
+                    "contributing_phenomena": list(hyp.contributing_phenomena),
+                })
+
+            return {
+                "action": "summary",
+                "query_type": "hypotheses",
+                "hypotheses": hypotheses_info,
+                "total_count": len(self.session.hypotheses),
+                "session": self.session,
+            }
+
+        # 未知查询类型
+        return {
+            "action": "summary",
+            "query_type": "unknown",
+            "message": "未知的查询类型",
             "session": self.session,
         }
 

@@ -257,6 +257,7 @@ class DiagnosisRenderer:
         reasoning: str = "",
         solution: str = "",
         forced: bool = False,
+        unconfirmed_phenomena: list = None,
     ) -> Union[Panel, Group]:
         """渲染诊断结果
 
@@ -269,6 +270,7 @@ class DiagnosisRenderer:
             reasoning: 推理链路（RAR 使用）
             solution: 恢复措施（RAR 使用）
             forced: 是否强制诊断（RAR 使用，信息不足时）
+            unconfirmed_phenomena: 未确认的现象列表（GAR2 使用）
 
         Returns:
             Rich Panel 或 Group 对象
@@ -287,23 +289,42 @@ class DiagnosisRenderer:
             content_parts.append(md)
             content_parts.append(Text(""))
 
-        # RAR 专用：构建 Markdown 诊断报告
-        if observed_phenomena or reasoning or solution:
+        # RAR/GAR2 专用：构建 Markdown 诊断报告
+        if observed_phenomena or reasoning or solution or unconfirmed_phenomena:
             diagnosis_md_parts = []
 
             if observed_phenomena:
                 diagnosis_md_parts.append("### 观察到的现象\n")
                 for i, obs in enumerate(observed_phenomena, 1):
-                    diagnosis_md_parts.append(f"{i}. {obs}\n")
+                    # 支持 dict 或 str 格式
+                    if isinstance(obs, dict):
+                        diagnosis_md_parts.append(f"{i}. {obs.get('description', obs)}\n")
+                    else:
+                        diagnosis_md_parts.append(f"{i}. {obs}\n")
                 diagnosis_md_parts.append("\n")
 
             if reasoning:
-                diagnosis_md_parts.append("### 推理链路\n")
+                diagnosis_md_parts.append("### 推导过程\n")
                 diagnosis_md_parts.append(f"{reasoning}\n\n")
 
             if solution:
                 diagnosis_md_parts.append("### 恢复措施\n")
-                diagnosis_md_parts.append(f"{solution}\n")
+                diagnosis_md_parts.append(f"{solution}\n\n")
+
+            if unconfirmed_phenomena:
+                diagnosis_md_parts.append("### 待确认现象\n")
+                diagnosis_md_parts.append("以下现象可进一步确认以提高诊断准确性：\n")
+                for i, p in enumerate(unconfirmed_phenomena, 1):
+                    if isinstance(p, dict):
+                        desc = p.get('description', '')
+                        method = p.get('observation_method', '')
+                        if method:
+                            diagnosis_md_parts.append(f"{i}. {desc}\n   - 观察方法: {method}\n")
+                        else:
+                            diagnosis_md_parts.append(f"{i}. {desc}\n")
+                    else:
+                        diagnosis_md_parts.append(f"{i}. {p}\n")
+                diagnosis_md_parts.append("\n")
 
             if diagnosis_md_parts:
                 md = Markdown("".join(diagnosis_md_parts), justify="left")

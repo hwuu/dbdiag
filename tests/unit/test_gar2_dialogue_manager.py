@@ -43,7 +43,7 @@ class TestGAR2DialogueManager:
             manager._root_cause_dao = MagicMock()
 
             # Mock 子模块
-            manager.input_analyzer = MagicMock()
+            manager.intent_classifier = MagicMock()
             manager.observation_matcher = MagicMock()
             manager.confidence_calculator = MagicMock()
 
@@ -79,7 +79,12 @@ class TestGAR2DialogueManager:
 
     def test_start_conversation_creates_session(self):
         """start_conversation 创建新会话"""
+        from dbdiag.core.intent.models import UserIntent
+
         manager = self._create_mock_manager()
+        manager.intent_classifier.classify.return_value = UserIntent(
+            new_observations=["数据库很慢"]
+        )
         manager.observation_matcher.match_all.return_value = MatchResult()
         manager.confidence_calculator.calculate.return_value = []
         manager.confidence_calculator.calculate_with_match_result.return_value = []
@@ -92,9 +97,14 @@ class TestGAR2DialogueManager:
 
     def test_start_conversation_matches_observation(self):
         """start_conversation 匹配用户输入到现象"""
+        from dbdiag.core.intent.models import UserIntent
+
         manager = self._create_mock_manager(
             phenomena={"P-001": {"description": "慢查询"}},
             phenomenon_root_causes={"P-001": {"RC-001": 5}},
+        )
+        manager.intent_classifier.classify.return_value = UserIntent(
+            new_observations=["数据库很慢"]
         )
         match_result = MatchResult(
             phenomena=[PhenomenonMatch(phenomenon_id="P-001", score=0.85)],
@@ -111,7 +121,12 @@ class TestGAR2DialogueManager:
 
     def test_start_conversation_unmatched_observation(self):
         """start_conversation 处理未匹配的观察"""
+        from dbdiag.core.intent.models import UserIntent
+
         manager = self._create_mock_manager()
+        manager.intent_classifier.classify.return_value = UserIntent(
+            new_observations=["未知问题"]
+        )
         manager.observation_matcher.match_all.return_value = MatchResult()
         manager.confidence_calculator.calculate.return_value = []
 
@@ -121,6 +136,37 @@ class TestGAR2DialogueManager:
         obs = manager.session.symptom.observations[0]
         assert obs.matched_phenomenon_id is None
         assert obs.match_score == 0.0
+
+    def test_start_conversation_query_intent_guides_user(self):
+        """start_conversation query 意图返回引导信息"""
+        from dbdiag.core.intent.models import UserIntent, IntentType, QueryType
+
+        manager = self._create_mock_manager()
+        manager.intent_classifier.classify.return_value = UserIntent(
+            intent_type=IntentType.QUERY,
+            query_type=QueryType.PROGRESS,
+        )
+
+        response = manager.start_conversation("现在进行到哪里了？")
+
+        assert response["action"] == "guide"
+        assert "尚未开始诊断" in response["message"]
+
+    def test_start_conversation_empty_feedback_guides_user(self):
+        """start_conversation 无实质内容返回引导信息"""
+        from dbdiag.core.intent.models import UserIntent, IntentType
+
+        manager = self._create_mock_manager()
+        manager.intent_classifier.classify.return_value = UserIntent(
+            intent_type=IntentType.FEEDBACK,
+            confirmations=["P-001"],  # 第一轮没有推荐，确认无意义
+            new_observations=[],
+        )
+
+        response = manager.start_conversation("1确认")
+
+        assert response["action"] == "guide"
+        assert "请描述" in response["message"]
 
     # ===== continue_conversation =====
 
@@ -136,7 +182,7 @@ class TestGAR2DialogueManager:
     def test_continue_conversation_increments_turn(self):
         """continue_conversation 增加轮次"""
         from dbdiag.core.gar2.models import SessionStateV2
-        from dbdiag.core.gar2.input_analyzer import SymptomDelta
+        from dbdiag.core.intent.models import UserIntent
 
         manager = self._create_mock_manager()
         manager.session = SessionStateV2(
@@ -145,7 +191,7 @@ class TestGAR2DialogueManager:
         )
         manager.session.turn_count = 1
 
-        manager.input_analyzer.analyze.return_value = SymptomDelta()
+        manager.intent_classifier.classify.return_value = UserIntent()
         manager.confidence_calculator.calculate.return_value = []
 
         manager.continue_conversation("确认")
@@ -214,8 +260,15 @@ class TestGAR2DialogueManager:
         from dbdiag.core.gar2.models import SessionStateV2, HypothesisV2
 
         manager = self._create_mock_manager(
+            phenomena={"P-001": {"description": "观察1"}},
             root_causes={"RC-001": {"description": "磁盘故障", "solution": "更换磁盘"}},
         )
+        manager._ticket_dao = MagicMock()
+        manager._ticket_dao.get_by_root_cause_id.return_value = []
+        manager.llm_service = MagicMock()
+        manager.llm_service.generate_simple.return_value = "推导过程"
+        manager.db_path = ":memory:"
+
         manager.session = SessionStateV2(
             session_id="test",
             user_problem="测试",
@@ -224,7 +277,7 @@ class TestGAR2DialogueManager:
 
         hyp = HypothesisV2(
             root_cause_id="RC-001",
-            confidence=0.85,
+            confidence=0.96,  # 超过 0.95 阈值
             contributing_phenomena=["P-001"],
         )
         manager.confidence_calculator.calculate.return_value = [hyp]
@@ -233,7 +286,10 @@ class TestGAR2DialogueManager:
 
         assert response["action"] == "diagnose"
         assert response["root_cause_id"] == "RC-001"
-        assert response["confidence"] == 0.85
+        assert response["confidence"] == 0.96
+        assert "reasoning" in response
+        assert "unconfirmed_phenomena" in response
+        assert "supporting_tickets" in response
 
     def test_calculate_and_decide_low_confidence_recommend(self):
         """低置信度推荐现象"""

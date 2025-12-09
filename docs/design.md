@@ -113,6 +113,9 @@ dbdiag/
 │   ├── cli/                      # 命令行界面
 │   │   └── main.py               # CLI/GARCLI/HybCLI/RARCLI/GAR2CLI 类
 │   ├── core/                     # 核心逻辑
+│   │   ├── intent/               # 意图识别模块（解耦）
+│   │   │   ├── models.py         # UserIntent, IntentType, QueryType
+│   │   │   └── classifier.py     # IntentClassifier（LLM-based）
 │   │   ├── gar/                  # GAR（图谱增强推理）
 │   │   │   ├── dialogue_manager.py
 │   │   │   ├── hypothesis_tracker.py
@@ -942,7 +945,137 @@ def generate_diagnosis_summary(
 **引用工单：** [T-0001] [T-0005]
 ```
 
-### 4.5 对话管理
+### 4.5 意图识别模块 (IntentClassifier)
+
+**文件**: `dbdiag/core/intent/`
+
+**职责**: 解耦的用户意图识别框架，可用于任何对话系统。
+
+#### 4.5.1 设计理念
+
+意图识别模块从 GAR2 的 `InputAnalyzer` 演化而来，但进行了架构解耦：
+- 完全基于 LLM，不依赖关键字匹配
+- 支持三种意图类型和三种查询子类型
+- 可独立于 GAR2 使用，适用于其他对话系统
+
+#### 4.5.2 数据模型
+
+```python
+class IntentType(str, Enum):
+    """意图类型"""
+    FEEDBACK = "feedback"      # 诊断反馈（确认/否认/新观察）
+    QUERY = "query"            # 系统查询
+    MIXED = "mixed"            # 混合意图
+
+class QueryType(str, Enum):
+    """查询子类型"""
+    PROGRESS = "progress"      # 查询诊断进展
+    CONCLUSION = "conclusion"  # 查询当前结论
+    HYPOTHESES = "hypotheses"  # 查询假设列表
+
+class UserIntent(BaseModel):
+    intent_type: IntentType
+    confirmations: List[str]       # 确认的现象 ID
+    denials: List[str]             # 否认的现象 ID
+    new_observations: List[str]    # 新观察（支持多个，对应 I-303）
+    query_type: Optional[QueryType]
+    confidence: float              # LLM 分类置信度
+```
+
+#### 4.5.3 意图分类流程
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        IntentClassifier Flow                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────┐                                                          │
+│  │ User Input     │                                                          │
+│  │ + Recommended  │                                                          │
+│  │   Phenomena    │                                                          │
+│  └───────┬────────┘                                                          │
+│          │                                                                   │
+│          ▼                                                                   │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    LLM Intent Classification                          │  │
+│  │                                                                       │  │
+│  │  System Prompt:                                                       │  │
+│  │  - Define intent types (feedback/query/mixed)                         │  │
+│  │  - Define query subtypes (progress/conclusion/hypotheses)             │  │
+│  │  - Specify JSON output format                                         │  │
+│  │                                                                       │  │
+│  │  User Prompt:                                                         │  │
+│  │  - Current recommended phenomena list                                 │  │
+│  │  - User input text                                                    │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│          │                                                                   │
+│          ▼                                                                   │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    Parse LLM Response                                 │  │
+│  │                                                                       │  │
+│  │  1. Clean markdown code blocks (```json ... ```)                      │  │
+│  │  2. Parse JSON                                                        │  │
+│  │  3. Validate phenomenon IDs (filter invalid)                          │  │
+│  │  4. Build UserIntent object                                           │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│          │                                                                   │
+│          ▼                                                                   │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    Fallback Handling                                  │  │
+│  │                                                                       │  │
+│  │  - LLM failure → feedback with user input as new observation          │  │
+│  │  - Invalid JSON → feedback with low confidence                        │  │
+│  │  - Empty input → empty UserIntent                                     │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 4.5.4 意图路由（GAR2DialogueManager）
+
+```python
+def continue_conversation(self, user_message: str) -> Dict[str, Any]:
+    # 1. 意图分类
+    intent = self.intent_classifier.classify(
+        user_message,
+        self.session.recommended_phenomenon_ids,
+        phenomenon_descriptions,
+    )
+
+    # 2. 根据意图类型路由
+    if intent.intent_type == IntentType.QUERY:
+        # 纯查询：直接返回状态总结
+        return self._generate_summary_response(intent.query_type)
+
+    # 3. 处理反馈（FEEDBACK 或 MIXED）
+    for phenomenon_id in intent.confirmations:
+        self._handle_confirmation(phenomenon_id)
+    for phenomenon_id in intent.denials:
+        self._handle_denial(phenomenon_id)
+
+    # 4. 处理新观察
+    if intent.new_observations:
+        result = self._process_new_observations(intent.new_observations)
+    else:
+        result = self._calculate_and_decide()
+
+    # 5. MIXED 意图：附加查询响应
+    if intent.intent_type == IntentType.MIXED and intent.query_type:
+        summary = self._generate_summary_response(intent.query_type)
+        result["query_response"] = summary
+
+    return result
+```
+
+#### 4.5.5 查询响应类型
+
+| 查询类型 | 用户示例 | 响应内容 |
+|---------|---------|---------|
+| `progress` | "检查了什么？" | 观察数量、匹配现象、阻塞现象、假设数量 |
+| `conclusion` | "有什么结论？" | top 假设、置信度、是否可确认 |
+| `hypotheses` | "还有哪些可能？" | Top-5 假设列表及其贡献现象 |
+
+### 4.6 对话管理
 
 系统支持三种诊断方法，各有特点：
 
@@ -1316,7 +1449,7 @@ class MatchResult(BaseModel):
 │  │                                                                         │ │
 │  └─────────────────────────────────────────────────────────────────────────┘ │
 │        │                                                                     │
-│        ▼ MatchResult                                                         │
+│        ▼ MatchResult (only best match per observation)                       │
 │  ┌─────────────────────────────────────────────────────────────────────────┐ │
 │  │                 ConfidenceCalculator.calculate_with_match_result()      │ │
 │  │                                                                         │ │
@@ -1336,8 +1469,8 @@ class MatchResult(BaseModel):
 │        ▼ confidence                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │              Decision: Recommend or Diagnose                      │       │
-│  │  confidence ≥ 80%  →  diagnose                                    │       │
-│  │  confidence < 80%  →  recommend next phenomena                    │       │
+│  │  confidence ≥ 95%  →  diagnose (generate diagnosis report)        │       │
+│  │  confidence < 95%  →  recommend next phenomena                    │       │
 │  └──────────────────────────────────────────────────────────────────┘       │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -1362,7 +1495,37 @@ class MatchResult(BaseModel):
        return MatchResult(phenomena, root_causes, tickets)
    ```
 
-2. **加权置信度计算**：三种匹配结果按权重贡献到根因置信度
+2. **只使用 best 匹配**：每个观察只取最佳匹配，不使用 top-5 的所有匹配
+   ```python
+   # _process_new_observations 中只聚合 best 匹配
+   best_phenomenon = match_result.best_phenomenon
+   if best_phenomenon:
+       aggregated_match.phenomena.append(best_phenomenon)
+
+   # root_cause 和 ticket 也只取 best
+   if match_result.root_causes:
+       aggregated_match.root_causes.append(match_result.root_causes[0])
+   if match_result.tickets:
+       aggregated_match.tickets.append(match_result.tickets[0])
+   ```
+
+3. **累积 match_result 到 session**：多轮对话中的匹配结果累积，而非每轮重新计算
+   ```python
+   # SessionStateV2 中维护累积的 match_result
+   accumulated_match_result: Optional[MatchResult] = None
+
+   # _process_new_observations 中累积
+   if has_new_observation and aggregated_match.has_matches:
+       if self.session.accumulated_match_result is None:
+           self.session.accumulated_match_result = aggregated_match
+       else:
+           self.session.accumulated_match_result.merge(aggregated_match)
+
+   # _calculate_and_decide 使用累积的 match_result
+   match_result = self.session.accumulated_match_result
+   ```
+
+4. **加权置信度计算**：三种匹配结果按权重贡献到根因置信度
    ```python
    # phenomena 贡献（权重 0.5）
    contribution += match_score * phenomenon_weight * 0.5
@@ -1374,37 +1537,72 @@ class MatchResult(BaseModel):
    contribution += match_score * 0.2
    ```
 
-3. **否认处理**：否认现象时，阻塞该现象及其关联的所有根因
+5. **去重逻辑**：计算置信度时对 phenomena、root_causes、tickets 各自去重，相同 ID 只保留最高分数
+
+6. **否认处理**：否认现象时，阻塞该现象及其关联的所有根因
    ```python
    def _handle_denial(self, phenomenon_id):
        related_root_causes = self.confidence_calculator.get_related_root_causes(phenomenon_id)
        self.session.symptom.block_phenomenon(phenomenon_id, related_root_causes)
    ```
 
-4. **输入分析器**：支持多种输入格式
-   - 简单格式：`1确认 2否定`（关键词匹配）
-   - 全局操作：`全否定`、`确认`
-   - 自然语言：通过 LLM 结构化提取（可选）
+7. **意图识别器**（`IntentClassifier`）：解耦的 LLM-based 意图分类
+   - 完全基于 LLM，不使用关键字匹配
+   - 支持三种意图类型：
+     - `feedback`：诊断反馈（确认/否认/新观察）
+     - `query`：系统查询（进展/结论/假设）
+     - `mixed`：混合意图（先处理反馈，再返回查询响应）
+   - 查询子类型：`progress`、`conclusion`、`hypotheses`
+   - LLM 失败时兜底为 feedback（将用户输入作为新观察）
+
+8. **诊断报告内容**（置信度 ≥ 95% 时生成）：
+   - 根因信息及置信度
+   - 观察到的现象列表
+   - 推导过程（LLM 生成，解释现象如何指向根因）
+   - 待确认现象（未被用户确认但与根因相关的现象）
+   - 恢复措施
+   - 参考工单列表（按与已确认现象的匹配度排序）
 
 **置信度计算公式**：
 
 ```python
 def calculate_with_match_result(symptom, match_result) -> List[HypothesisV2]:
+    # 关键：match_result 只包含每个观察的 best 匹配（不是 top-5）
+    # 这确保每个观察只贡献一次，避免置信度过高
+
     # 1. phenomena 匹配贡献（权重 0.5）
+    # 去重：同一个 phenomenon_id 只取最高分数
+    phenomenon_best_scores: Dict[str, float] = {}
     for pm in match_result.phenomena:
-        for root_cause_id in get_related_root_causes(pm.phenomenon_id):
-            contribution = pm.score * phenomenon_weight * PHENOMENON_WEIGHT
+        if pm.phenomenon_id not in phenomenon_best_scores or pm.score > phenomenon_best_scores[pm.phenomenon_id]:
+            phenomenon_best_scores[pm.phenomenon_id] = pm.score
+
+    for phenomenon_id, match_score in phenomenon_best_scores.items():
+        for root_cause_id in get_related_root_causes(phenomenon_id):
+            contribution = match_score * phenomenon_weight * PHENOMENON_WEIGHT
             root_cause_scores[root_cause_id] += contribution
 
     # 2. root_cause 直接匹配贡献（权重 0.3）
+    # 去重：同一个 root_cause_id 只取最高分数
+    root_cause_best_scores: Dict[str, float] = {}
     for rcm in match_result.root_causes:
-        contribution = rcm.score * ROOT_CAUSE_WEIGHT
-        root_cause_scores[rcm.root_cause_id] += contribution
+        if rcm.root_cause_id not in root_cause_best_scores or rcm.score > root_cause_best_scores[rcm.root_cause_id]:
+            root_cause_best_scores[rcm.root_cause_id] = rcm.score
+
+    for root_cause_id, score in root_cause_best_scores.items():
+        contribution = score * ROOT_CAUSE_WEIGHT
+        root_cause_scores[root_cause_id] += contribution
 
     # 3. ticket 匹配贡献（权重 0.2）
+    # 去重：同一个 ticket_id 只取最高分数
+    ticket_best_scores: Dict[str, tuple] = {}  # ticket_id -> (score, root_cause_id)
     for tm in match_result.tickets:
-        contribution = tm.score * TICKET_WEIGHT
-        root_cause_scores[tm.root_cause_id] += contribution
+        if tm.ticket_id not in ticket_best_scores or tm.score > ticket_best_scores[tm.ticket_id][0]:
+            ticket_best_scores[tm.ticket_id] = (tm.score, tm.root_cause_id)
+
+    for ticket_id, (score, root_cause_id) in ticket_best_scores.items():
+        contribution = score * TICKET_WEIGHT
+        root_cause_scores[root_cause_id] += contribution
 
     # 4. 加上 symptom 中已确认观察的贡献（跳过已处理的现象，避免重复计算）
     for obs in symptom.observations:

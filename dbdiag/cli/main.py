@@ -751,11 +751,17 @@ class GAR2CLI(CLI):
         confidence = response.get("confidence", 0.0)
         solution = response.get("solution", "")
         observed_phenomena = response.get("observed_phenomena", [])
+        reasoning = response.get("reasoning", "")
+        unconfirmed_phenomena = response.get("unconfirmed_phenomena", [])
+        supporting_tickets = response.get("supporting_tickets", [])
 
         panel = self.renderer.render_diagnosis_result(
             root_cause=root_cause,
             observed_phenomena=observed_phenomena,
+            reasoning=reasoning,
             solution=solution,
+            unconfirmed_phenomena=unconfirmed_phenomena,
+            citations=supporting_tickets,
         )
         self._print_indented(Text(""))
         self._print_indented(panel)
