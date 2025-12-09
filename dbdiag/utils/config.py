@@ -32,6 +32,12 @@ class WebConfig(BaseModel):
     diagnosis_mode: str = "gar2"  # gar/hyb/rar/gar2
 
 
+class RebuildIndexConfig(BaseModel):
+    """索引重建配置"""
+    enable_clustering: bool = False  # 是否启用聚类，默认 false
+    similarity_threshold: float = 0.85  # 聚类相似度阈值（仅 enable_clustering=true 时有效）
+
+
 class RecommenderWeightsConfig(BaseModel):
     """推荐引擎权重配置"""
     popularity: float = 0.15
@@ -69,6 +75,7 @@ class Config(BaseModel):
     embedding_model: EmbeddingModelConfig
     recommender: RecommenderConfig = RecommenderConfig()
     web: WebConfig = WebConfig()
+    rebuild_index: RebuildIndexConfig = RebuildIndexConfig()
 
 
 def load_config(config_path: Optional[str] = None) -> Config:

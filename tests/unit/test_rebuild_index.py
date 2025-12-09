@@ -5,13 +5,21 @@ import tempfile
 import os
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dbdiag.scripts.init_db import init_database
 from dbdiag.scripts.import_raw_tickets import import_tickets
+
+
+def _create_mock_config(enable_clustering: bool = True, similarity_threshold: float = 0.95):
+    """创建 mock 配置对象"""
+    mock_config = MagicMock()
+    mock_config.rebuild_index.enable_clustering = enable_clustering
+    mock_config.rebuild_index.similarity_threshold = similarity_threshold
+    return mock_config
 
 
 class TestRebuildIndex:
@@ -93,18 +101,21 @@ class TestRebuildIndex:
                 [0.7, 0.8, 0.9],  # TICKET-003_anomaly_1 (连接数)
             ]
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.95)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
+
+                        from dbdiag.scripts.rebuild_index import rebuild_index
+                        rebuild_index(db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -128,18 +139,21 @@ class TestRebuildIndex:
                 [0.7, 0.8, 0.9],
             ]
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.95)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
+
+                        from dbdiag.scripts.rebuild_index import rebuild_index
+                        rebuild_index(db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -164,18 +178,21 @@ class TestRebuildIndex:
                 [0.7, 0.8, 0.9],  # TICKET-003_anomaly_1 (连接数) - 不同
             ]
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.99)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
-                    rebuild_index(db_path, similarity_threshold=0.99)
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
+
+                        from dbdiag.scripts.rebuild_index import rebuild_index
+                        rebuild_index(db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -199,18 +216,21 @@ class TestRebuildIndex:
 
             mock_embeddings = [[0.1] * 3] * 4
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.95)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
+
+                        from dbdiag.scripts.rebuild_index import rebuild_index
+                        rebuild_index(db_path)
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -232,38 +252,41 @@ class TestRebuildIndex:
 
             mock_embeddings = [[0.1] * 3] * 4
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                mock_embedding_instance.encode_batch.return_value = mock_embeddings
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.95)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    mock_embedding_instance.encode_batch.return_value = mock_embeddings
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
 
-                    # 第一次 rebuild
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                        from dbdiag.scripts.rebuild_index import rebuild_index
 
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM phenomena")
-                    first_count = cursor.fetchone()[0]
-                    conn.close()
+                        # 第一次 rebuild
+                        rebuild_index(db_path)
 
-                    # 第二次 rebuild（应该清除旧数据重建）
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM phenomena")
+                        first_count = cursor.fetchone()[0]
+                        conn.close()
 
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM phenomena")
-                    second_count = cursor.fetchone()[0]
-                    conn.close()
+                        # 第二次 rebuild（应该清除旧数据重建）
+                        rebuild_index(db_path)
 
-                    # 数量应该相同（不是累加）
-                    assert first_count == second_count
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM phenomena")
+                        second_count = cursor.fetchone()[0]
+                        conn.close()
+
+                        # 数量应该相同（不是累加）
+                        assert first_count == second_count
 
     def test_rebuild_index_creates_root_causes(self):
         """测试:rebuild_index 应创建 root_causes 记录"""
@@ -281,23 +304,26 @@ class TestRebuildIndex:
             # RAR combined_text embeddings（3 个工单）
             rar_embeddings = [[0.5] * 3] * 3
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                # encode_batch 被调用三次：anomalies, root_causes, RAR combined_text
-                mock_embedding_instance.encode_batch.side_effect = [
-                    anomaly_embeddings,
-                    root_cause_embeddings,
-                    rar_embeddings,
-                ]
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.95)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    # encode_batch 被调用三次：anomalies, root_causes, RAR combined_text
+                    mock_embedding_instance.encode_batch.side_effect = [
+                        anomaly_embeddings,
+                        root_cause_embeddings,
+                        rar_embeddings,
+                    ]
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
+
+                        from dbdiag.scripts.rebuild_index import rebuild_index
+                        rebuild_index(db_path)
 
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
@@ -336,23 +362,26 @@ class TestRebuildIndex:
             # RAR combined_text embeddings（3 个工单）
             rar_embeddings = [[0.5] * 3] * 3
 
-            with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
-                mock_embedding_instance = Mock()
-                # encode_batch 被调用三次：anomalies, root_causes, RAR combined_text
-                mock_embedding_instance.encode_batch.side_effect = [
-                    anomaly_embeddings,
-                    root_cause_embeddings,
-                    rar_embeddings,
-                ]
-                MockEmbedding.return_value = mock_embedding_instance
+            with patch('dbdiag.scripts.rebuild_index.load_config') as MockLoadConfig:
+                MockLoadConfig.return_value = _create_mock_config(enable_clustering=True, similarity_threshold=0.95)
 
-                with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
-                    mock_llm_instance = Mock()
-                    mock_llm_instance.generate_simple.return_value = "标准化描述"
-                    MockLLM.return_value = mock_llm_instance
+                with patch('dbdiag.scripts.rebuild_index.EmbeddingService') as MockEmbedding:
+                    mock_embedding_instance = Mock()
+                    # encode_batch 被调用三次：anomalies, root_causes, RAR combined_text
+                    mock_embedding_instance.encode_batch.side_effect = [
+                        anomaly_embeddings,
+                        root_cause_embeddings,
+                        rar_embeddings,
+                    ]
+                    MockEmbedding.return_value = mock_embedding_instance
 
-                    from dbdiag.scripts.rebuild_index import rebuild_index
-                    rebuild_index(db_path, similarity_threshold=0.95)
+                    with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
+                        mock_llm_instance = Mock()
+                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        MockLLM.return_value = mock_llm_instance
+
+                        from dbdiag.scripts.rebuild_index import rebuild_index
+                        rebuild_index(db_path)
 
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row

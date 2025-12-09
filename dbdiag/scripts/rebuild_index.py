@@ -30,7 +30,6 @@ from dbdiag.dao import RawAnomalyDAO, RawTicketDAO, IndexBuilderDAO
 def rebuild_index(
     db_path: Optional[str] = None,
     config_path: Optional[str] = None,
-    similarity_threshold: float = 0.85,
 ) -> None:
     """
     重建索引
@@ -38,7 +37,6 @@ def rebuild_index(
     Args:
         db_path: 数据库路径，默认 data/tickets.db
         config_path: 配置文件路径，默认 config.yaml
-        similarity_threshold: 聚类相似度阈值，默认 0.85
     """
     if db_path is None:
         project_root = Path(__file__).parent.parent.parent
@@ -47,12 +45,18 @@ def rebuild_index(
     if not Path(db_path).exists():
         raise FileNotFoundError(f"数据库文件不存在: {db_path}")
 
-    print(f"[rebuild-index] 开始重建索引...")
-    print(f"数据库: {db_path}")
-    print(f"相似度阈值: {similarity_threshold}")
-
     # 加载配置
     config = load_config(config_path)
+
+    # 读取索引重建配置
+    enable_clustering = config.rebuild_index.enable_clustering
+    similarity_threshold = config.rebuild_index.similarity_threshold
+
+    print(f"[rebuild-index] 开始重建索引...")
+    print(f"数据库: {db_path}")
+    print(f"聚类模式: {'启用' if enable_clustering else '禁用'}")
+    if enable_clustering:
+        print(f"相似度阈值: {similarity_threshold}")
 
     # 初始化服务
     embedding_service = EmbeddingService(config)
@@ -101,21 +105,27 @@ def rebuild_index(
         norms = [np.linalg.norm(e) for e in embeddings[:5]]
         print(f"  [DEBUG] 前 5 个向量范数: {[f'{n:.4f}' for n in norms]}")
 
-    # 3. 异常向量聚类
+    # 3. 异常向量聚类（仅当启用聚类时）
     print("\n[3/7] 异常向量聚类...")
-    clusters = cluster_by_similarity(raw_anomalies, similarity_threshold)
-    print(f"  聚类结果: {len(raw_anomalies)} 个异常 -> {len(clusters)} 个聚类")
+    if enable_clustering:
+        clusters = cluster_by_similarity(raw_anomalies, similarity_threshold)
+        print(f"  聚类结果: {len(raw_anomalies)} 个异常 -> {len(clusters)} 个聚类")
+    else:
+        # 不聚类：每个异常独立成一个"聚类"
+        clusters = [[anomaly] for anomaly in raw_anomalies]
+        print(f"  [不聚类] {len(raw_anomalies)} 个异常 -> {len(clusters)} 个现象（1:1 映射）")
 
     # 4. 生成标准现象
     print("\n[4/7] 生成标准现象...")
     phenomena = []
     anomaly_to_phenomenon = {}  # raw_anomaly_id -> phenomenon_id
 
-    # 统计信息
-    single_item_count = sum(1 for c in clusters if len(c) == 1)
-    multi_item_count = len(clusters) - single_item_count
-    print(f"  单项聚类: {single_item_count} 个（无需 LLM）")
-    print(f"  多项聚类: {multi_item_count} 个（需要 LLM 生成标准描述）")
+    if enable_clustering:
+        # 统计信息
+        single_item_count = sum(1 for c in clusters if len(c) == 1)
+        multi_item_count = len(clusters) - single_item_count
+        print(f"  单项聚类: {single_item_count} 个（无需 LLM）")
+        print(f"  多项聚类: {multi_item_count} 个（需要 LLM 生成标准描述）")
 
     llm_call_times = []
 
@@ -123,7 +133,7 @@ def rebuild_index(
         phenomenon = _generate_phenomenon(
             cluster_id=cluster_id,
             cluster_items=cluster_items,
-            llm_service=llm_service,
+            llm_service=llm_service if enable_clustering else None,  # 不聚类时不需要 LLM
             llm_call_times=llm_call_times,
         )
         phenomena.append(phenomenon)
@@ -164,14 +174,19 @@ def rebuild_index(
     # 6. 根因聚类 + 生成标准根因
     print("\n[6/7] 根因聚类...")
     if raw_root_causes:
-        rc_clusters = cluster_by_similarity(raw_root_causes, similarity_threshold, debug=True)
-        print(f"  聚类结果: {len(raw_root_causes)} 个原始根因 -> {len(rc_clusters)} 个聚类")
+        if enable_clustering:
+            rc_clusters = cluster_by_similarity(raw_root_causes, similarity_threshold, debug=True)
+            print(f"  聚类结果: {len(raw_root_causes)} 个原始根因 -> {len(rc_clusters)} 个聚类")
 
-        # 统计信息
-        rc_single_count = sum(1 for c in rc_clusters if len(c) == 1)
-        rc_multi_count = len(rc_clusters) - rc_single_count
-        print(f"  单项聚类: {rc_single_count} 个（无需 LLM）")
-        print(f"  多项聚类: {rc_multi_count} 个（需要 LLM 生成标准描述）")
+            # 统计信息
+            rc_single_count = sum(1 for c in rc_clusters if len(c) == 1)
+            rc_multi_count = len(rc_clusters) - rc_single_count
+            print(f"  单项聚类: {rc_single_count} 个（无需 LLM）")
+            print(f"  多项聚类: {rc_multi_count} 个（需要 LLM 生成标准描述）")
+        else:
+            # 不聚类：每个原始根因独立成一个"聚类"
+            rc_clusters = [[rc] for rc in raw_root_causes]
+            print(f"  [不聚类] {len(raw_root_causes)} 个原始根因 -> {len(rc_clusters)} 个根因（1:1 映射）")
 
         root_causes = []
         raw_rc_to_standard = {}  # raw_root_cause_id -> root_cause_id
@@ -181,7 +196,7 @@ def rebuild_index(
             root_cause = _generate_root_cause(
                 cluster_id=cluster_id,
                 cluster_items=cluster_items,
-                llm_service=llm_service,
+                llm_service=llm_service if enable_clustering else None,  # 不聚类时不需要 LLM
                 llm_call_times=rc_llm_times,
             )
             root_causes.append(root_cause)
@@ -308,7 +323,7 @@ def cluster_by_similarity(
 def _generate_phenomenon(
     cluster_id: int,
     cluster_items: List[Dict[str, Any]],
-    llm_service: LLMService,
+    llm_service: Optional[LLMService],
     llm_call_times: List[float] = None,
 ) -> Dict[str, Any]:
     """
@@ -317,7 +332,7 @@ def _generate_phenomenon(
     Args:
         cluster_id: 聚类 ID
         cluster_items: 聚类中的原始异常列表
-        llm_service: LLM 服务
+        llm_service: LLM 服务（None 表示不使用 LLM）
         llm_call_times: LLM 调用耗时列表（用于统计）
 
     Returns:
@@ -329,8 +344,8 @@ def _generate_phenomenon(
     descriptions = [item["description"] for item in cluster_items]
     methods = [item["observation_method"] for item in cluster_items]
 
-    # 如果只有一个项，直接使用
-    if len(cluster_items) == 1:
+    # 如果只有一个项，或者不使用 LLM，直接使用第一个描述
+    if len(cluster_items) == 1 or llm_service is None:
         standard_description = descriptions[0]
     else:
         # 使用 LLM 生成标准化描述
@@ -422,7 +437,7 @@ def _extract_raw_root_causes(raw_ticket_dao: RawTicketDAO) -> List[Dict[str, Any
 def _generate_root_cause(
     cluster_id: int,
     cluster_items: List[Dict[str, Any]],
-    llm_service: LLMService,
+    llm_service: Optional[LLMService],
     llm_call_times: List[float] = None,
 ) -> Dict[str, Any]:
     """
@@ -431,7 +446,7 @@ def _generate_root_cause(
     Args:
         cluster_id: 聚类 ID
         cluster_items: 聚类中的原始根因列表
-        llm_service: LLM 服务
+        llm_service: LLM 服务（None 表示不使用 LLM）
         llm_call_times: LLM 调用耗时列表（用于统计）
 
     Returns:
@@ -449,8 +464,8 @@ def _generate_root_cause(
         all_ticket_ids.extend(item["source_ticket_ids"])
     total_ticket_count = len(all_ticket_ids)
 
-    # 如果只有一个项，直接使用
-    if len(cluster_items) == 1:
+    # 如果只有一个项，或者不使用 LLM，直接使用第一个
+    if len(cluster_items) == 1 or llm_service is None:
         standard_description = descriptions[0]
         standard_solution = solutions[0]
     else:

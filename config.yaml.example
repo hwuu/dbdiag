@@ -16,6 +16,11 @@ embedding_model:
   model: "Qwen/Qwen3-Embedding-4B"
   dimension: 2560  # 向量维度（Qwen3-Embedding-4B 为 2560）
 
+# 索引重建配置
+rebuild_index:
+  enable_clustering: false    # 是否启用聚类，默认 false
+  similarity_threshold: 0.85  # 聚类相似度阈值（仅 enable_clustering=true 时有效）
+
 # 推荐引擎配置
 recommender:
   # 权重配置

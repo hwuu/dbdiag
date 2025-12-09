@@ -1751,6 +1751,22 @@ python -m dbdiag import data/example_tickets.json
 
 **功能**: 将原始数据转换为可检索的标准化数据。
 
+**配置项**:
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `enable_clustering` | `false` | 是否启用聚类。`true` 时聚类相似数据 + LLM 标准化；`false` 时直接 1:1 映射 |
+| `similarity_threshold` | `0.85` | 聚类相似度阈值（仅 `enable_clustering=true` 时有效） |
+
+**两种模式对比**:
+
+| 模式 | enable_clustering | 行为 | LLM 调用 |
+|------|-------------------|------|----------|
+| 直接映射 | `false` | 每个原始异常 → 1 个现象，每个原始根因 → 1 个根因 | 无 |
+| 聚类标准化 | `true` | 相似异常聚类 → 标准现象，相似根因聚类 → 标准根因 | 有（生成标准化描述） |
+
+> **注意**：无论哪种模式，都会生成 Embedding 向量（用于检索匹配功能）。
+
 **处理流程**:
 
 ```
@@ -1764,12 +1780,19 @@ python -m dbdiag import data/example_tickets.json
 │  [Step 2] 生成异常向量 (Embedding API)                                        │
 │       │                                                                      │
 │       ▼                                                                      │
-│  [Step 3] 异常向量聚类 (相似度阈值 0.85)                                      │
+│  [Step 3] 异常向量聚类                                                        │
+│       │   ┌─────────────────────────────────────────────────────────────┐   │
+│       │   │ enable_clustering=true  │ enable_clustering=false           │   │
+│       │   │ Cluster by similarity   │ Each anomaly → 1 cluster (1:1)    │   │
+│       │   └─────────────────────────────────────────────────────────────┘   │
 │       │                                                                      │
 │       ▼                                                                      │
-│  [Step 4] LLM 生成标准现象描述                                                │
-│       │   - 单项聚类：直接使用原始描述                                        │
-│       │   - 多项聚类：LLM 合并生成标准化描述                                  │
+│  [Step 4] 生成标准现象描述                                                    │
+│       │   ┌─────────────────────────────────────────────────────────────┐   │
+│       │   │ enable_clustering=true          │ enable_clustering=false   │   │
+│       │   │ Single: use original            │ Use original description  │   │
+│       │   │ Multi: LLM generate standard    │ (no LLM call)             │   │
+│       │   └─────────────────────────────────────────────────────────────┘   │
 │       │                                                                      │
 │       ▼                                                                      │
 │  [Step 5] 提取原始根因 (raw_root_causes)                                      │
@@ -1777,10 +1800,11 @@ python -m dbdiag import data/example_tickets.json
 │       │   - 生成根因向量 (Embedding API)                                      │
 │       │                                                                      │
 │       ▼                                                                      │
-│  [Step 6] 根因向量聚类 + LLM 标准化                                           │
-│       │   - 使用相同的 0.85 相似度阈值                                        │
-│       │   - 单项聚类：直接使用原始描述                                        │
-│       │   - 多项聚类：LLM 合并描述 + LLM 合并解决方案                         │
+│  [Step 6] 根因聚类 + 标准化                                                   │
+│       │   ┌─────────────────────────────────────────────────────────────┐   │
+│       │   │ enable_clustering=true          │ enable_clustering=false   │   │
+│       │   │ Cluster + LLM standardize       │ Each root cause → 1 RC    │   │
+│       │   └─────────────────────────────────────────────────────────────┘   │
 │       │                                                                      │
 │       ▼                                                                      │
 │  [Step 7] 保存到数据库                                                        │
@@ -2176,6 +2200,11 @@ web:
   host: "127.0.0.1"
   port: 8000
   diagnosis_mode: gar2         # gar/hyb/rar/gar2
+
+# 索引重建配置
+rebuild_index:
+  enable_clustering: false     # 是否启用聚类，默认 false
+  similarity_threshold: 0.85   # 聚类相似度阈值（仅 enable_clustering=true 时有效）
 ```
 
 ### C. CLI 命令
