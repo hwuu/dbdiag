@@ -678,8 +678,14 @@ class GAR2CLI(CLI):
             elif action == "diagnose":
                 self._render_diagnosis(response)
                 return True
+            elif action == "summary":
+                self._render_summary(response)
+                return False
             elif action == "ask_more_info":
                 self._print_indented(Text(response.get("message", "请提供更多信息"), style="yellow"))
+                return False
+            elif action == "guide":
+                self._print_indented(Text(response.get("message", ""), style="yellow"))
                 return False
             else:
                 message = response.get("message", "")
@@ -765,6 +771,88 @@ class GAR2CLI(CLI):
         )
         self._print_indented(Text(""))
         self._print_indented(panel)
+
+    def _render_summary(self, response: dict):
+        """渲染查询响应"""
+        query_type = response.get("query_type", "")
+
+        if query_type == "progress":
+            # 诊断进展
+            observations_count = response.get("observations_count", 0)
+            observations = response.get("observations", [])
+            matched_phenomena = response.get("matched_phenomena", [])
+            blocked_count = response.get("blocked_phenomena_count", 0)
+            top_hypotheses = response.get("top_hypotheses", [])
+
+            self._print_indented(Text("诊断进展:", style="bold"))
+
+            # 已收集观察
+            self._print_indented(Text(f"  已收集观察: {observations_count} 个"))
+            if observations:
+                for i, obs in enumerate(observations[:5], 1):
+                    obs_display = obs[:50] + "..." if len(obs) > 50 else obs
+                    self._print_indented(Text(f"    {i}. {obs_display}", style="dim"))
+                if len(observations) > 5:
+                    self._print_indented(Text(f"    ... 还有 {len(observations) - 5} 个", style="dim"))
+
+            # 已匹配现象
+            self._print_indented(Text(f"  已匹配现象: {len(matched_phenomena)} 个"))
+            if matched_phenomena:
+                for i, p in enumerate(matched_phenomena[:5], 1):
+                    desc = p.get("description", p.get("phenomenon_id", ""))
+                    desc_display = desc[:50] + "..." if len(desc) > 50 else desc
+                    self._print_indented(Text(f"    {i}. {desc_display}", style="dim"))
+                if len(matched_phenomena) > 5:
+                    self._print_indented(Text(f"    ... 还有 {len(matched_phenomena) - 5} 个", style="dim"))
+
+            # 已排除现象
+            self._print_indented(Text(f"  已排除现象: {blocked_count} 个"))
+
+            # 当前假设
+            self._print_indented(Text(f"  当前假设: {len(top_hypotheses)} 个"))
+            if top_hypotheses:
+                for i, hyp in enumerate(top_hypotheses[:5], 1):
+                    desc = hyp.get("description", hyp.get("root_cause_id", ""))
+                    conf = hyp.get("confidence", 0)
+                    desc_display = desc[:35] + "..." if len(desc) > 35 else desc
+                    self._print_indented(Text(f"    {i}. {conf:.0%} {desc_display}", style="dim"))
+
+        elif query_type == "conclusion":
+            # 当前结论
+            has_conclusion = response.get("has_conclusion", False)
+            if has_conclusion:
+                root_cause = response.get("root_cause", "未知")
+                confidence = response.get("confidence", 0)
+                level = response.get("confidence_level", "medium")
+                level_style = "green" if level == "high" else "yellow"
+                self._print_indented(Text("当前结论:", style="bold"))
+                self._print_indented(Text(f"  根因: {root_cause}", style=level_style))
+                self._print_indented(Text(f"  置信度: {confidence:.0%} ({level})", style=level_style))
+            else:
+                message = response.get("message", "当前信息不足，尚无明确结论。")
+                self._print_indented(Text(message, style="yellow"))
+                top_hyp = response.get("top_hypothesis")
+                if top_hyp:
+                    self._print_indented(Text(f"  当前最可能: {top_hyp['root_cause_id']} ({top_hyp['confidence']:.0%})", style="dim"))
+
+        elif query_type == "hypotheses":
+            # 假设列表
+            hypotheses = response.get("hypotheses", [])
+            total = response.get("total_count", 0)
+            self._print_indented(Text(f"当前假设 (共 {total} 个):", style="bold"))
+            if hypotheses:
+                for i, hyp in enumerate(hypotheses, 1):
+                    desc = hyp.get("description", hyp.get("root_cause_id", ""))
+                    conf = hyp.get("confidence", 0)
+                    self._print_indented(Text(f"  {i}. {conf:.0%} {desc}"))
+            else:
+                self._print_indented(Text("  暂无假设", style="dim"))
+
+        else:
+            # 未知查询类型
+            message = response.get("message", "")
+            if message:
+                self._print_indented(Text(message))
 
     def _update_stats_from_session(self):
         """从 session 更新统计信息"""

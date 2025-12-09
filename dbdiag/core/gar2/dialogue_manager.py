@@ -589,6 +589,26 @@ class GAR2DialogueManager:
             matched_phenomena = self.session.symptom.get_matched_phenomenon_ids()
             blocked_phenomena = list(self.session.symptom.blocked_phenomenon_ids)
 
+            # 获取匹配现象的详细信息
+            matched_phenomena_details = []
+            for pid in matched_phenomena:
+                phenomenon = self._get_phenomenon_by_id(pid)
+                if phenomenon:
+                    matched_phenomena_details.append({
+                        "phenomenon_id": pid,
+                        "description": phenomenon.get("description", pid),
+                    })
+
+            # 获取 Top 假设的详细信息
+            top_hypotheses = []
+            for hyp in self.session.hypotheses[:5]:
+                root_cause = self._root_cause_dao.get_by_id(hyp.root_cause_id)
+                top_hypotheses.append({
+                    "root_cause_id": hyp.root_cause_id,
+                    "description": root_cause.get("description", hyp.root_cause_id) if root_cause else hyp.root_cause_id,
+                    "confidence": hyp.confidence,
+                })
+
             return {
                 "action": "summary",
                 "query_type": "progress",
@@ -596,10 +616,11 @@ class GAR2DialogueManager:
                 "observations_count": len(observations),
                 "observations": [obs.description for obs in observations],
                 "matched_phenomena_count": len(matched_phenomena),
-                "matched_phenomena": list(matched_phenomena),
+                "matched_phenomena": matched_phenomena_details,
                 "blocked_phenomena_count": len(blocked_phenomena),
                 "blocked_phenomena": blocked_phenomena,
                 "hypotheses_count": len(self.session.hypotheses),
+                "top_hypotheses": top_hypotheses,
                 "session": self.session,
             }
 

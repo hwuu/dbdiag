@@ -217,6 +217,14 @@ class WebChatSession:
             elif action == "diagnose":
                 # GAR2 诊断
                 self._render_gar2_diagnosis(response)
+            elif action == "summary":
+                # GAR2 查询响应
+                self._render_gar2_summary(response)
+            elif action == "guide":
+                # GAR2 引导消息
+                message = response.get("message", "")
+                if message:
+                    self.console.print(f"  [yellow]{message}[/yellow]")
             else:
                 message = response.get("message", "")
                 if message:
@@ -361,6 +369,88 @@ class WebChatSession:
         )
         self.console.print()
         self.console.print("  ", result)
+
+    def _render_gar2_summary(self, response: dict):
+        """渲染 GAR2 查询响应"""
+        query_type = response.get("query_type", "")
+
+        if query_type == "progress":
+            # 诊断进展
+            observations_count = response.get("observations_count", 0)
+            observations = response.get("observations", [])
+            matched_phenomena = response.get("matched_phenomena", [])
+            blocked_count = response.get("blocked_phenomena_count", 0)
+            top_hypotheses = response.get("top_hypotheses", [])
+
+            self.console.print("  [bold]诊断进展:[/bold]")
+
+            # 已收集观察
+            self.console.print(f"    已收集观察: {observations_count} 个")
+            if observations:
+                for i, obs in enumerate(observations[:5], 1):
+                    obs_display = obs[:50] + "..." if len(obs) > 50 else obs
+                    self.console.print(f"      [dim]{i}. {obs_display}[/dim]")
+                if len(observations) > 5:
+                    self.console.print(f"      [dim]... 还有 {len(observations) - 5} 个[/dim]")
+
+            # 已匹配现象
+            self.console.print(f"    已匹配现象: {len(matched_phenomena)} 个")
+            if matched_phenomena:
+                for i, p in enumerate(matched_phenomena[:5], 1):
+                    desc = p.get("description", p.get("phenomenon_id", ""))
+                    desc_display = desc[:50] + "..." if len(desc) > 50 else desc
+                    self.console.print(f"      [dim]{i}. {desc_display}[/dim]")
+                if len(matched_phenomena) > 5:
+                    self.console.print(f"      [dim]... 还有 {len(matched_phenomena) - 5} 个[/dim]")
+
+            # 已排除现象
+            self.console.print(f"    已排除现象: {blocked_count} 个")
+
+            # 当前假设
+            self.console.print(f"    当前假设: {len(top_hypotheses)} 个")
+            if top_hypotheses:
+                for i, hyp in enumerate(top_hypotheses[:5], 1):
+                    desc = hyp.get("description", hyp.get("root_cause_id", ""))
+                    conf = hyp.get("confidence", 0)
+                    desc_display = desc[:35] + "..." if len(desc) > 35 else desc
+                    self.console.print(f"      [dim]{i}. {conf:.0%} {desc_display}[/dim]")
+
+        elif query_type == "conclusion":
+            # 当前结论
+            has_conclusion = response.get("has_conclusion", False)
+            if has_conclusion:
+                root_cause = response.get("root_cause", "未知")
+                confidence = response.get("confidence", 0)
+                level = response.get("confidence_level", "medium")
+                level_style = "green" if level == "high" else "yellow"
+                self.console.print("  [bold]当前结论:[/bold]")
+                self.console.print(f"    [{level_style}]根因: {root_cause}[/{level_style}]")
+                self.console.print(f"    [{level_style}]置信度: {confidence:.0%} ({level})[/{level_style}]")
+            else:
+                message = response.get("message", "当前信息不足，尚无明确结论。")
+                self.console.print(f"  [yellow]{message}[/yellow]")
+                top_hyp = response.get("top_hypothesis")
+                if top_hyp:
+                    self.console.print(f"    [dim]当前最可能: {top_hyp['root_cause_id']} ({top_hyp['confidence']:.0%})[/dim]")
+
+        elif query_type == "hypotheses":
+            # 假设列表
+            hypotheses = response.get("hypotheses", [])
+            total = response.get("total_count", 0)
+            self.console.print(f"  [bold]当前假设 (共 {total} 个):[/bold]")
+            if hypotheses:
+                for i, hyp in enumerate(hypotheses, 1):
+                    desc = hyp.get("description", hyp.get("root_cause_id", ""))
+                    conf = hyp.get("confidence", 0)
+                    self.console.print(f"    {i}. {conf:.0%} {desc}")
+            else:
+                self.console.print("    [dim]暂无假设[/dim]")
+
+        else:
+            # 未知查询类型
+            message = response.get("message", "")
+            if message:
+                self.console.print(f"  {message}")
 
     def _update_stats_from_session(self):
         """从 session 更新统计信息"""
