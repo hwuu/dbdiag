@@ -4,6 +4,7 @@
     python -m dbdiag cli            # 启动交互式 CLI 诊断（图谱方法）
     python -m dbdiag cli --rar      # 启动交互式 CLI 诊断（检索方法，实验性）
     python -m dbdiag cli --hyb      # 启动交互式 CLI 诊断（混合方法，实验性）
+    python -m dbdiag cli --agent    # 启动交互式 CLI 诊断（Agent 方法）
     python -m dbdiag web            # 启动 Web 控制台
     python -m dbdiag api            # 启动 FastAPI 服务
     python -m dbdiag init           # 初始化数据库
@@ -41,14 +42,19 @@ def main():
     help="使用图谱增强推理 v2 方法（实验性）",
 )
 @click.option(
+    "--agent",
+    is_flag=True,
+    help="使用 Agent Loop 方法",
+)
+@click.option(
     "--db",
     default=None,
     help="数据库文件路径（默认: data/tickets.db 或 DATA_DIR 环境变量）",
 )
-def interactive_cli(rar: bool, hyb: bool, gar2: bool, db: str):
+def interactive_cli(rar: bool, hyb: bool, gar2: bool, agent: bool, db: str):
     """启动交互式命令行诊断（推荐）"""
     from dbdiag.cli.main import main as cli_main
-    cli_main(use_rar=rar, use_hyb=hyb, use_gar2=gar2, db_path=db)
+    cli_main(use_rar=rar, use_hyb=hyb, use_gar2=gar2, use_agent=agent, db_path=db)
 
 
 @main.command("web")

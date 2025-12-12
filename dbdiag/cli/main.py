@@ -865,13 +865,223 @@ class GAR2CLI(CLI):
         self.stats["blocked"] = len(session.symptom.blocked_phenomenon_ids)
 
 
-def main(use_rar: bool = False, use_hyb: bool = False, use_gar2: bool = False, db_path: str = None):
+class AgentCLI(CLI):
+    """Agent CLI（Agent Loop 架构）
+
+    基于 Agent Loop 的诊断推理引擎。
+    """
+
+    def __init__(self):
+        """初始化"""
+        super().__init__()
+
+        from dbdiag.core.agent import AgentDialogueManager
+        from dbdiag.dao import RootCauseDAO
+
+        # 渲染器
+        self.renderer = DiagnosisRenderer(self.console)
+
+        # Agent 对话管理器（传入进度回调）
+        self.dialogue_manager = AgentDialogueManager(
+            self.db_path, self.llm_service, self.embedding_service,
+            progress_callback=self._print_progress,
+        )
+
+        # DAO
+        self._root_cause_dao = RootCauseDAO(self.db_path)
+
+        # 统计
+        self.stats = {
+            "confirmed": 0,   # 确认的现象数
+            "denied": 0,      # 否认的现象数
+            "hypotheses": 0,  # 假设数
+        }
+
+    def _print_progress(self, message: str):
+        """打印进度信息"""
+        self._print_indented(Text(f"→ {message}", style="dim"))
+
+    # ===== 实现抽象方法 =====
+
+    def _show_welcome(self) -> None:
+        """显示欢迎信息"""
+        self.console.print(Text(self.renderer.get_logo("agent"), style="bold steel_blue"))
+        self.console.print(Text("Agent 诊断系统", style="bold steel_blue"))
+
+    def _get_prompt(self) -> str:
+        """获取输入提示符"""
+        return "[bold steel_blue]> [/bold steel_blue]"
+
+    def _get_available_commands(self) -> str:
+        """获取可用命令列表"""
+        return "/help /status /reset /exit"
+
+    def _show_help(self) -> None:
+        """显示帮助信息"""
+        self.console.print(self.renderer.render_help("agent"))
+
+    def _show_status(self) -> None:
+        """显示当前状态"""
+        if not self.session_id:
+            self.console.print(Text("还没有开始诊断会话", style="yellow"))
+        else:
+            self._update_stats_from_session()
+            self.console.print(self._render_footer())
+
+    def _reset_session(self) -> None:
+        """重置会话状态"""
+        if self.session_id:
+            self.dialogue_manager.reset_session(self.session_id)
+        self.session_id = None
+        self.round_count = 0
+        self.stats = {"confirmed": 0, "denied": 0, "hypotheses": 0}
+
+    def _handle_diagnosis(self, user_message: str) -> bool:
+        """处理诊断消息，返回 True 表示诊断完成"""
+        try:
+            self.console.print()
+            self.console.print(Text.from_markup(f"[bold]• 第 {self.round_count + 1} 轮[/bold]"))
+            self.round_count += 1
+
+            if not self.session_id:
+                self._print_indented(Text("正在分析问题...", style="dim"))
+                self.session_id = self.dialogue_manager.create_session(user_message)
+
+            self._print_indented(Text("正在处理...", style="dim"))
+            response = self.dialogue_manager.process_input(self.session_id, user_message)
+
+            self.console.print()
+
+            # 更新统计并显示状态
+            self._update_stats_from_session()
+            self._print_indented(self._render_footer())
+            self.console.print()  # footer 和响应之间空一行
+
+            # 渲染响应
+            self._render_response(response)
+
+            # 输出末尾空行（与下一轮输入分隔）
+            self.console.print()
+
+            # 检查是否完成诊断
+            if response.details and response.details.diagnosis:
+                return True
+
+            return False
+
+        except Exception as e:
+            self._print_indented(Text(f"处理失败: {str(e)}", style="red"))
+            import traceback
+            traceback.print_exc()
+            return False
+
+    # ===== Agent 特有方法 =====
+
+    def _get_root_cause_description(self, root_cause_id: str) -> str:
+        """获取根因描述"""
+        return self._root_cause_dao.get_description(root_cause_id)
+
+    def _render_footer(self) -> Group:
+        """渲染底部状态栏"""
+        session = self.dialogue_manager.get_session(self.session_id) if self.session_id else None
+        hypotheses = []
+        if session and session.hypotheses:
+            for hyp in session.hypotheses[:3]:
+                hypotheses.append((hyp.confidence, hyp.root_cause_description))
+
+        return self.renderer.render_status_bar(
+            round_count=self.round_count,
+            recommended=0,  # Agent 不追踪推荐数
+            confirmed=self.stats["confirmed"],
+            denied=self.stats["denied"],
+            hypotheses=hypotheses,
+        )
+
+    def _render_response(self, response):
+        """渲染 Agent 响应"""
+        from rich.markdown import Markdown
+        from rich.console import Group
+
+        # 检查是否有澄清场景
+        if response.details and response.details.clarifications:
+            self._render_clarifications(response.details.clarifications)
+            return
+
+        # 渲染主体消息（Markdown）
+        if response.message:
+            self._print_indented(Markdown(response.message))
+
+        # 如果有诊断结论，特别渲染
+        if response.details and response.details.diagnosis:
+            diagnosis = response.details.diagnosis
+            panel = self.renderer.render_diagnosis_result(
+                root_cause=diagnosis.root_cause_description,
+                observed_phenomena=diagnosis.observed_phenomena,
+                reasoning=diagnosis.reasoning,
+                solution=diagnosis.solution,
+                citations=diagnosis.reference_tickets,
+            )
+            self._print_indented(Text(""))
+            self._print_indented(panel)
+
+    def _render_clarifications(self, clarifications):
+        """渲染澄清消息（使用 Rich Text，格式与推荐输出一致）
+
+        Args:
+            clarifications: 需要澄清的观察列表
+        """
+        from rich.console import Group
+
+        parts = []
+
+        for clarif in clarifications:
+            # 引导语
+            intro = Text()
+            intro.append(f"您提到的「{clarif.raw_description}」可能对应以下几种情况，请确认哪个最符合您的观察：")
+            parts.append(intro)
+            parts.append(Text(""))
+
+            # 选项
+            if clarif.clarification_options:
+                for i, opt in enumerate(clarif.clarification_options, 1):
+                    # 选项标题：数字 + 空格 + 描述
+                    opt_title = Text()
+                    opt_title.append(f" {i} ", style="bold")
+                    opt_title.append(opt.description)
+                    parts.append(opt_title)
+
+                    # 观察方法（使用 • 前缀）
+                    if opt.observation_method:
+                        parts.append(Text(f"    • 观察方法: {opt.observation_method.strip()}", style="dim"))
+
+        # 提示（与选项之间空一行）
+        parts.append(Text(""))
+        parts.append(Text("请输入序号确认（如：1确认）或描述新观察。", style="dim"))
+
+        self._print_indented(Group(*parts))
+
+    def _update_stats_from_session(self):
+        """从 session 更新统计信息"""
+        if not self.session_id:
+            return
+
+        session = self.dialogue_manager.get_session(self.session_id)
+        if not session:
+            return
+
+        self.stats["confirmed"] = session.confirmed_count
+        self.stats["denied"] = session.denied_count
+        self.stats["hypotheses"] = len(session.hypotheses)
+
+
+def main(use_rar: bool = False, use_hyb: bool = False, use_gar2: bool = False, use_agent: bool = False, db_path: str = None):
     """入口
 
     Args:
         use_rar: 是否使用 RAR 方法
         use_hyb: 是否使用混合增强方法
         use_gar2: 是否使用 GAR2 方法
+        use_agent: 是否使用 Agent 方法
         db_path: 数据库路径，如果指定则覆盖默认路径
     """
     import os
@@ -880,7 +1090,9 @@ def main(use_rar: bool = False, use_hyb: bool = False, use_gar2: bool = False, d
     if db_path:
         os.environ["DB_PATH"] = db_path
 
-    if use_gar2:
+    if use_agent:
+        cli = AgentCLI()
+    elif use_gar2:
         cli = GAR2CLI()
     elif use_hyb:
         cli = HybCLI()

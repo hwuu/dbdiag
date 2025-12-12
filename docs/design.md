@@ -103,7 +103,8 @@ dbdiag/
 │   ├── __main__.py               # CLI 入口
 │   ├── api/                      # FastAPI 接口
 │   │   ├── main.py
-│   │   ├── chat.py
+│   │   ├── chat.py               # GAR2 聊天 API
+│   │   ├── agent_chat.py         # Agent 聊天 API
 │   │   ├── session.py
 │   │   └── websocket.py          # WebSocket 实时诊断
 │   ├── web/                      # Web 前端
@@ -128,9 +129,23 @@ dbdiag/
 │   │   │   ├── input_analyzer.py
 │   │   │   ├── confidence_calculator.py
 │   │   │   └── dialogue_manager.py
-│   │   └── rar/                  # RAR（检索增强推理）
-│   │       ├── dialogue_manager.py
-│   │       └── retriever.py
+│   │   ├── rar/                  # RAR（检索增强推理）
+│   │   │   ├── dialogue_manager.py
+│   │   │   └── retriever.py
+│   │   └── agent/                # Agent（Agent Loop 架构）
+│   │       ├── models.py         # SessionState, Hypothesis, AgentDecision 等
+│   │       ├── graph_engine.py   # 确定性诊断核心（贝叶斯推理）
+│   │       ├── planner.py        # LLM 决策层
+│   │       ├── executor.py       # 工具执行器
+│   │       ├── responder.py      # 响应生成层
+│   │       ├── dialogue_manager.py  # Agent Loop 主控
+│   │       └── tools/            # 工具集
+│   │           ├── base.py       # BaseTool 抽象基类
+│   │           ├── diagnose.py   # 诊断工具
+│   │           ├── match_phenomena.py  # 现象匹配工具
+│   │           ├── query_progress.py   # 查询进度工具
+│   │           ├── query_hypotheses.py # 查询假设工具
+│   │           └── query_relations.py  # 查询关系工具
 │   ├── dao/                      # 数据访问层
 │   │   ├── base.py
 │   │   ├── phenomenon_dao.py
@@ -1708,13 +1723,13 @@ def calculate_with_match_result(symptom, match_result) -> List[HypothesisV2]:
 │                        │  - run()    │                                  │
 │                        └──────┬──────┘                                  │
 │                               │                                         │
-│         ┌─────────────────────┼────────────────────┬────────────┐       │
+│         ┌─────────────────────┼────────────────────┬────────────┬───────┤
 │         │                     │                    │            │       │
-│         ▼                     │                    ▼            ▼       │
-│  ┌─────────────┐              │            ┌─────────────┐ ┌─────────┐  │
-│  │   GARCLI    │              │            │   RARCLI    │ │GAR2CLI  │  │
-│  │   (Graph)   │              │            │ (Retrieval) │ │  (v2)   │  │
-│  └──────┬──────┘              │            └─────────────┘ └─────────┘  │
+│         ▼                     │                    ▼            ▼       ▼
+│  ┌─────────────┐              │            ┌─────────────┐ ┌─────────┐ ┌─────────┐
+│  │   GARCLI    │              │            │   RARCLI    │ │GAR2CLI  │ │AgentCLI │
+│  │   (Graph)   │              │            │ (Retrieval) │ │  (v2)   │ │ (Agent) │
+│  └──────┬──────┘              │            └─────────────┘ └─────────┘ └─────────┘
 │         │                     │                                         │
 │         ▼                     │                                         │
 │  ┌─────────────┐              │                                         │
@@ -1758,6 +1773,7 @@ class CLI(ABC):
 | `HybCLI` | 混合增强推理，GAR + 语义检索 | `python -m dbdiag cli --hyb` |
 | `RARCLI` | 检索增强推理，RAG + LLM 端到端 | `python -m dbdiag cli --rar` |
 | `GAR2CLI` | 图谱增强推理 v2，基于观察的推理 | `python -m dbdiag cli --gar2` |
+| `AgentCLI` | Agent Loop 架构，LLM 决策 + 确定性核 | `python -m dbdiag cli --agent` |
 
 **HybCLI 实现**:
 
@@ -2428,6 +2444,9 @@ python -m dbdiag cli --hyb
 
 # 启动 CLI 诊断（GAR2 模式，实验性）
 python -m dbdiag cli --gar2
+
+# 启动 CLI 诊断（Agent 模式）
+python -m dbdiag cli --agent
 
 # 启动 Web 控制台
 python -m dbdiag web

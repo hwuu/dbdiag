@@ -55,6 +55,15 @@ class DiagnosisRenderer:
 ╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝        ╚═════╝ ╚══════╝
 """
 
+    LOGO_AGENT = """
+██████╗ ██████╗ ██████╗ ██╗ █████╗  ██████╗        █████╗
+██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝       ██╔══██╗
+██║  ██║██████╔╝██║  ██║██║███████║██║  ███╗█████╗███████║
+██║  ██║██╔══██╗██║  ██║██║██╔══██║██║   ██║╚════╝██╔══██║
+██████╔╝██████╔╝██████╔╝██║██║  ██║╚██████╔╝      ██║  ██║
+╚═════╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝ ╚═════╝       ╚═╝  ╚═╝
+"""
+
     def __init__(self, console: Console = None):
         """初始化渲染器
 
@@ -67,7 +76,7 @@ class DiagnosisRenderer:
         """获取 LOGO
 
         Args:
-            mode: 诊断模式 (gar/hyb/rar/gar2)
+            mode: 诊断模式 (gar/hyb/rar/gar2/agent)
 
         Returns:
             LOGO 字符串
@@ -77,6 +86,7 @@ class DiagnosisRenderer:
             "hyb": self.LOGO_HYB,
             "rar": self.LOGO_RAR,
             "gar2": self.LOGO_GAR2,
+            "agent": self.LOGO_AGENT,
         }
         return logos.get(mode, self.LOGO_GAR).strip()
 
@@ -123,6 +133,7 @@ class DiagnosisRenderer:
                 bar = self._render_confidence_bar(i, conf, desc)
                 content_parts.append(bar)
         else:
+            content_parts.append(Text(""))  # 空行
             content_parts.append(Text("暂无假设", style="dim"))
 
         return Group(*content_parts)
@@ -396,6 +407,16 @@ class DiagnosisRenderer:
 - `全否定` - 否认所有推荐的现象
 - `确认` - 确认所有推荐的现象
 - 直接描述新观察到的现象
+            """
+        elif mode == "agent":
+            help_text = """
+**Agent 模式可用命令：**
+- `/help` - 显示此帮助
+- `/status` - 查看当前诊断状态
+- `/reset` - 重新开始诊断
+- `/exit` - 退出程序
+
+直接描述观察到的现象或确认/否认推荐的现象。
             """
         else:
             help_text = """
