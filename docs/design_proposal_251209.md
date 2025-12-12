@@ -157,12 +157,12 @@ User Input: "1确认，另外 IO 很高"
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Loop 1: Planner                                                    │
+│ Loop 1: Planner                                                         │
 │                                                                         │
 │ Input:  user_message + session (pending: [P-0001, P-0002, P-0003])      │
 │ Output: {                                                               │
 │   decision: "call_tool",                                                │
-│   tool: "match_phenomena",                                       │
+│   tool: "match_phenomena",                                              │
 │   params: {                                                             │
 │     confirmations: ["P-0001"],                                          │
 │     raw_observations: ["IO很高"]                                        │
@@ -172,7 +172,7 @@ User Input: "1确认，另外 IO 很高"
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Tool Execution: match_phenomena                                  │
+│ Tool Execution: match_phenomena                                         │
 │                                                                         │
 │ Result: {                                                               │
 │   all_matched: true,                                                    │
@@ -184,9 +184,9 @@ User Input: "1确认，另外 IO 很高"
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Loop 2: Planner (with tool result)                                 │
+│ Loop 2: Planner (with tool result)                                      │
 │                                                                         │
-│ Input:  previous context + match_phenomena result (all_matched: true)    │
+│ Input:  previous context + match_phenomena result (all_matched: true)   │
 │ Output: {                                                               │
 │   decision: "call_tool",                                                │
 │   tool: "diagnose",                                                     │
@@ -211,7 +211,7 @@ User Input: "1确认，另外 IO 很高"
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Loop 3: Planner (with diagnose result)                             │
+│ Loop 3: Planner (with diagnose result)                                  │
 │                                                                         │
 │ Input:  previous context + diagnose result                              │
 │ Output: {                                                               │
@@ -222,7 +222,7 @@ User Input: "1确认，另外 IO 很高"
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Responder                                                        │
+│ Responder                                                               │
 │                                                                         │
 │ Output: "好的，已记录你的反馈。目前最可能是索引膨胀（72%）...           │
 │          建议接下来确认：1. xxx  2. xxx"                                │
@@ -238,13 +238,13 @@ User Input: "数据库有点慢"
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Loop 1: Planner                                                    │
-│ Output: { decision: "call_tool", tool: "match_phenomena", ... }  │
+│ Loop 1: Planner                                                         │
+│ Output: { decision: "call_tool", tool: "match_phenomena", ... }         │
 └───────────────────────────────────┬─────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Tool Execution: match_phenomena                                  │
+│ Tool Execution: match_phenomena                                         │
 │                                                                         │
 │ Result: {                                                               │
 │   all_matched: false,                                                   │
@@ -259,7 +259,7 @@ User Input: "数据库有点慢"
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Loop 2: Planner (with match_phenomena result: needs_clarification)  │
+│ Loop 2: Planner (with match_phenomena result: needs_clarification)      │
 │                                                                         │
 │ Output: {                                                               │
 │   decision: "respond",           // 需要用户澄清，不继续调工具          │
@@ -269,7 +269,7 @@ User Input: "数据库有点慢"
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Responder                                                        │
+│ Responder                                                               │
 │                                                                         │
 │ Output: "你说的'慢'具体是指哪种情况？                                   │
 │          1. 查询响应时间长  2. 连接建立慢  3. 写入延迟高"               │
@@ -1196,7 +1196,7 @@ User Input: "1确认，另外 IO 很高"
 │                                                                 │
 │ 2. Agent Loop:                                                  │
 │    ┌─────────────────────────────────────────────────────────┐  │
-│    │ Loop 1: Planner -> call match_phenomena                    │  │
+│    │ Loop 1: Planner -> call match_phenomena                 │  │
 │    │ Loop 2: Planner -> call diagnose                        │  │
 │    │ Loop 3: Planner -> respond                              │  │
 │    └─────────────────────────────────────────────────────────┘  │
