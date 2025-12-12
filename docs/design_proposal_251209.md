@@ -283,14 +283,23 @@ User Input: "数据库有点慢"
 
 | 模块 | 职责 | 是否使用 LLM |
 |------|------|-------------|
-| **Planner** | 在 Agent Loop 中决策：调哪个工具 / 直接回复 / 需要澄清 | 是 |
-| **Executor** | 执行单个工具调用，返回结果 | 否 |
-| **match_phenomena** | 将原始观察描述匹配到标准 phenomena，处理指代消解 | 是（Embedding 召回 + LLM 精排） |
-| **diagnose** | 核心诊断算法，纯确定性贝叶斯推理 | **否** |
-| **query_progress / query_hypotheses / ...** | 查询类工具，纯确定性 | **否** |
+| **AgentDialogueManager** | Agent Loop 主控，协调 Planner/Executor/Responder | 否 |
+| **Planner** | 决策下一步行动：call 或 respond | 是 |
+| **Executor** | 执行工具调用，管理工具注册 | 否 |
 | **Responder** | 将结构化结果转换为自然语言响应 | 是 |
+| **GraphEngine** | 确定性诊断核心（贝叶斯推理、图谱查询） | 否 |
 
-### 2.3 目录结构
+### 2.3 工具列表
+
+| 工具 | 职责 | 类型 |
+|------|------|------|
+| **match_phenomena** | 匹配原始描述到标准现象，处理指代消解 | LLM + Embedding |
+| **diagnose** | 执行贝叶斯推理诊断 | 确定性 |
+| **query_progress** | 查询诊断进展 | 确定性 |
+| **query_hypotheses** | 查询假设详情 | 确定性 |
+| **query_relations** | 查询图谱关系 | 确定性 |
+
+### 2.4 目录结构
 
 ```
 dbdiag/core/
