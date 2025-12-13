@@ -147,6 +147,7 @@ class MatchPhenomenaTool(BaseTool[MatchPhenomenaInput, MatchPhenomenaOutput]):
         # 1. 处理直接确认的现象（通过 ID）
         self._report_progress(f"[match_phenomena] 处理确认列表: {len(input.confirmations)} 个")
         for confirm_id in input.confirmations:
+            self._report_progress(f"[match_phenomena]   确认 ID: {confirm_id}")
             phenomenon = self._phenomenon_dao.get_by_id(confirm_id)
             if phenomenon:
                 interpreted_results.append(InterpretedObservation(
@@ -159,6 +160,9 @@ class MatchPhenomenaTool(BaseTool[MatchPhenomenaInput, MatchPhenomenaOutput]):
                     ),
                     needs_clarification=False,
                 ))
+                self._report_progress(f"[match_phenomena]   -> 找到现象: {phenomenon.get('description', '')[:30]}...")
+            else:
+                self._report_progress(f"[match_phenomena]   -> 未找到现象 {confirm_id}")
 
         # 2. 处理原始观察描述
         if input.raw_observations:

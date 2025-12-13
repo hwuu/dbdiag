@@ -41,10 +41,16 @@ RESPONDER_SYSTEM_PROMPT = """你是一个数据库诊断助手。根据诊断结
    - confirming（接近确认）：表达信心，但提醒还需确认
    - stuck（卡住）：委婉表达困难，建议换个方向
 5. 如果有多个工具调用结果，自然地整合在一起
+6. **诊断完成时**（diagnosis_complete=true）：
+   - 明确告知用户已确定根因
+   - 展示根因描述、置信度
+   - 展示解决方案（solution）
+   - **不再让用户确认其他现象**
 
 ## 输出格式
 
 直接输出响应文本。推荐现象用编号列表展示，每个现象包含描述、观察方法、推荐原因。
+诊断完成时，输出诊断结论和解决方案。
 """
 
 
@@ -189,10 +195,38 @@ class Responder:
     def _format_response_data(self, response_type: str, data: Dict[str, Any]) -> str:
         """格式化响应数据"""
         if response_type == "diagnosis_result":
+            diagnosis_complete = data.get("diagnosis_complete", False)
+            diagnosis = data.get("diagnosis")
+
+            # 诊断已完成，输出最终结论
+            if diagnosis_complete and diagnosis:
+                conf = diagnosis.get('confidence', 0)
+                if isinstance(conf, str):
+                    try:
+                        conf = float(conf)
+                    except ValueError:
+                        conf = 0
+                lines = [
+                    "**诊断已完成**",
+                    f"- 根因: {diagnosis.get('root_cause_description', '未知')}",
+                    f"- 置信度: {conf:.0%}",
+                ]
+                solution = diagnosis.get('solution', '')
+                if solution:
+                    lines.append(f"- 解决方案: {solution}")
+                return "\n".join(lines)
+
+            # 诊断进行中，输出当前假设
             hypotheses = data.get("hypotheses", [])
             if hypotheses:
                 top = hypotheses[0]
-                return f"最可能根因: {top.get('root_cause_description', '未知')} (置信度: {top.get('confidence', 0):.0%})"
+                conf = top.get('confidence', 0)
+                if isinstance(conf, str):
+                    try:
+                        conf = float(conf)
+                    except ValueError:
+                        conf = 0
+                return f"最可能根因: {top.get('root_cause_description', '未知')} (置信度: {conf:.0%})"
             return "暂无假设"
 
         elif response_type == "clarification_needed":

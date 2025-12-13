@@ -1234,6 +1234,71 @@ User Input: "1确认，另外 IO 很高"
 
 **传递给 Planner**：只传最近 3 轮对话历史，控制 token 消耗
 
+### 4.9 工具间数据流增强
+
+#### 4.9.1 设计背景
+
+Agent Loop 中，Planner（LLM）负责决定工具调用顺序和参数。但实际运行中发现两个问题：
+
+1. **序号转换问题**：用户说 "1确认" 时，Planner 可能直接传序号 "1" 给 diagnose，而非真正的 phenomenon_id（如 "P-0090"）
+2. **数据丢失问题**：match_phenomena 返回的匹配结果需要传递给 diagnose，但 Planner 可能遗漏部分信息
+
+#### 4.9.2 解决方案
+
+在 `AgentDialogueManager` 中实现 **数据流增强**，自动处理工具间的数据传递：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ DialogueManager._run_agent_loop                                 │
+│                                                                 │
+│  pending_matched_phenomena = []  // 保存本轮匹配结果            │
+│                                                                 │
+│  Loop:                                                          │
+│    ┌─────────────────────────────────────────────────────────┐  │
+│    │ Planner -> call match_phenomena                         │  │
+│    │                                                         │  │
+│    │ if match_phenomena returns all_matched=true:            │  │
+│    │   -> Save results to pending_matched_phenomena          │  │
+│    └─────────────────────────────────────────────────────────┘  │
+│                         │                                       │
+│                         ▼                                       │
+│    ┌─────────────────────────────────────────────────────────┐  │
+│    │ Planner -> call diagnose                                │  │
+│    │                                                         │  │
+│    │ Before execute:                                         │  │
+│    │   -> _enrich_diagnose_input():                          │  │
+│    │      1. Convert sequence numbers to phenomenon_ids      │  │
+│    │         ("1" -> "P-0090" via session.recommendations)   │  │
+│    │      2. Inject pending_matched_phenomena                │  │
+│    └─────────────────────────────────────────────────────────┘  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### 4.9.3 关键方法
+
+```python
+def _enrich_diagnose_input(
+    self,
+    tool_input: dict,
+    pending_matched_phenomena: List[dict],
+    session: SessionState,
+) -> dict:
+    """为 diagnose 注入 match_phenomena 的匹配结果
+
+    处理逻辑：
+    1. 序号转换：如果 Planner 传了序号（如 "1", "2"），
+       通过 session.recommendations 转换为真正的 phenomenon_id
+    2. 数据合并：将本轮 match_phenomena 的匹配结果自动注入
+    """
+```
+
+#### 4.9.4 设计原则
+
+- **Planner 仍是决策者**：DialogueManager 只做数据增强，不改变决策逻辑
+- **向后兼容**：如果 Planner 传的是正确的 phenomenon_id，增强逻辑不影响
+- **透明调试**：增强过程通过 progress_callback 输出日志，便于排查
+
 ---
 
 ## 五、Responder 设计
@@ -1310,10 +1375,16 @@ class CallError(BaseModel):
    - confirming（接近确认）：表达信心，但提醒还需确认
    - stuck（卡住）：委婉表达困难，建议换个方向
 5. 如果有多个工具调用结果，自然地整合在一起
+6. **诊断完成时**（diagnosis_complete=true）：
+   - 明确告知用户已确定根因
+   - 展示根因描述、置信度
+   - 展示解决方案（solution）
+   - **不再让用户确认其他现象**
 
 ## 输出格式
 
 直接输出响应文本。推荐现象用编号列表展示，每个现象包含描述、观察方法、推荐原因。
+诊断完成时，输出诊断结论和解决方案。
 ```
 
 ### 5.5 响应示例
@@ -1875,7 +1946,42 @@ agent:
   high_confidence_threshold: 0.95    # 诊断完成阈值
   stuck_detection_rounds: 3          # 卡住检测轮数
   session_timeout_minutes: 30        # 会话超时时间（Web API）
+
+llm:
+  timeout: 30                        # LLM 调用超时时间（秒）
+  max_retries: 3                     # 最大重试次数
+  retry_delay: 1                     # 重试间隔（秒），使用指数退避
 ```
+
+### 10.4 LLM 服务可靠性
+
+为保证 Agent Loop 的稳定性，`LLMService` 实现了超时重试机制：
+
+```python
+class LLMService:
+    DEFAULT_TIMEOUT = 30       # 默认超时 30 秒
+    DEFAULT_MAX_RETRIES = 3    # 默认重试 3 次
+    DEFAULT_RETRY_DELAY = 1    # 默认重试间隔 1 秒
+
+    def generate(self, messages, ...):
+        for attempt in range(self.max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    ...,
+                    timeout=self.timeout,
+                )
+                return response
+            except (APITimeoutError, APIConnectionError, RateLimitError):
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay * (attempt + 1))  # 指数退避
+                    continue
+                raise
+```
+
+**重试策略**：
+- 捕获 `APITimeoutError`、`APIConnectionError`、`RateLimitError`
+- 使用指数退避：第 1 次重试等待 1s，第 2 次等待 2s，第 3 次等待 3s
+- 其他类型错误不重试，直接抛出
 
 ---
 

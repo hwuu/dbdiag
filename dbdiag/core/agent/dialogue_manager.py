@@ -187,6 +187,9 @@ class AgentDialogueManager:
         # 获取对话历史
         dialogue_history = self._format_dialogue_history(session.session_id)
 
+        # 保存本轮 match_phenomena 的匹配结果（用于传递给 diagnose）
+        pending_matched_phenomena: List[dict] = []
+
         for iteration in range(self.MAX_LOOP_ITERATIONS):
             # 1. Planner 决策
             self._report_progress("Planner 思考中...")
@@ -212,6 +215,14 @@ class AgentDialogueManager:
                         dialogue_history,
                     )
 
+                # 特殊处理 diagnose：注入 match_phenomena 的匹配结果
+                if decision.tool == "diagnose":
+                    tool_input = self._enrich_diagnose_input(
+                        tool_input,
+                        pending_matched_phenomena,
+                        current_session,
+                    )
+
                 output, current_session, error = self._executor.execute(
                     current_session,
                     decision.tool,
@@ -231,9 +242,20 @@ class AgentDialogueManager:
                     decision.tool, output
                 )
 
-                # 特殊处理：match_phenomena 需要澄清时，直接返回
+                # 特殊处理：match_phenomena 成功时，保存匹配结果
                 if decision.tool == "match_phenomena" and isinstance(output, MatchPhenomenaOutput):
-                    if not output.all_matched:
+                    if output.all_matched:
+                        # 提取匹配成功的现象，保存供 diagnose 使用
+                        for interp in output.interpreted:
+                            if interp.matched_phenomenon:
+                                pending_matched_phenomena.append({
+                                    "phenomenon_id": interp.matched_phenomenon.phenomenon_id,
+                                    "phenomenon_description": interp.matched_phenomenon.phenomenon_description,
+                                    "user_observation": interp.matched_phenomenon.user_observation,
+                                    "match_score": interp.matched_phenomenon.match_score,
+                                })
+                        self._report_progress(f"保存匹配结果: {len(pending_matched_phenomena)} 个现象")
+                    else:
                         self._report_progress("现象匹配需要澄清，准备生成响应...")
                         response = self._responder.generate_for_clarification(
                             current_session, output
@@ -310,6 +332,76 @@ class AgentDialogueManager:
             enriched["pending_recommendations"] = self._planner.build_pending_recommendations_for_input(
                 session.recommendations
             )
+
+        return enriched
+
+    def _enrich_diagnose_input(
+        self,
+        tool_input: dict,
+        pending_matched_phenomena: List[dict],
+        session: SessionState,
+    ) -> dict:
+        """为 diagnose 注入 match_phenomena 的匹配结果
+
+        Args:
+            tool_input: 原始工具输入
+            pending_matched_phenomena: 本轮 match_phenomena 匹配成功的现象列表
+            session: 会话状态（用于将序号转换为现象 ID）
+
+        Returns:
+            增强后的工具输入
+        """
+        enriched = dict(tool_input)
+
+        # 合并 Planner 提供的和自动收集的 confirmed_phenomena
+        existing = enriched.get("confirmed_phenomena", [])
+        if not isinstance(existing, list):
+            existing = []
+
+        # 将序号转换为真正的现象 ID
+        converted_existing = []
+        for item in existing:
+            if isinstance(item, dict):
+                pid = item.get("phenomenon_id", "")
+            else:
+                pid = str(item)
+
+            # 检查是否是序号（纯数字）
+            if pid.isdigit():
+                idx = int(pid) - 1  # 序号从 1 开始
+                if 0 <= idx < len(session.recommendations):
+                    # 转换为真正的现象 ID
+                    rec = session.recommendations[idx]
+                    converted_existing.append({
+                        "phenomenon_id": rec.phenomenon_id,
+                        "phenomenon_description": rec.description,
+                        "user_observation": "用户确认",
+                        "match_score": 1.0,
+                    })
+                    self._report_progress(f"  序号 {pid} -> {rec.phenomenon_id}")
+            else:
+                # 已经是现象 ID
+                if isinstance(item, dict):
+                    converted_existing.append(item)
+                else:
+                    converted_existing.append({
+                        "phenomenon_id": pid,
+                        "phenomenon_description": "",
+                        "user_observation": "",
+                        "match_score": 1.0,
+                    })
+
+        existing = converted_existing
+
+        # 添加自动收集的匹配结果（去重）
+        existing_ids = {p.get("phenomenon_id") for p in existing if isinstance(p, dict)}
+        for matched in pending_matched_phenomena:
+            if matched["phenomenon_id"] not in existing_ids:
+                existing.append(matched)
+                existing_ids.add(matched["phenomenon_id"])
+
+        enriched["confirmed_phenomena"] = existing
+        self._report_progress(f"注入 diagnose 输入: {len(existing)} 个确认现象")
 
         return enriched
 
