@@ -400,6 +400,13 @@ class AgentDialogueManager:
                 existing.append(matched)
                 existing_ids.add(matched["phenomenon_id"])
 
+        # 修正 match_score 范围（Planner 可能返回百分比形式如 98 而非 0.98）
+        for item in existing:
+            if isinstance(item, dict) and "match_score" in item:
+                score = item["match_score"]
+                if isinstance(score, (int, float)) and score > 1:
+                    item["match_score"] = score / 100.0
+
         enriched["confirmed_phenomena"] = existing
         self._report_progress(f"注入 diagnose 输入: {len(existing)} 个确认现象")
 

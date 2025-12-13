@@ -881,6 +881,12 @@ class AgentCLI(CLI):
         # 渲染器
         self.renderer = DiagnosisRenderer(self.console)
 
+        # 重新创建 LLM 服务（带进度回调，用于显示重试信息）
+        self.llm_service = LLMService(
+            self.config,
+            progress_callback=self._print_progress,
+        )
+
         # Agent 对话管理器（传入进度回调）
         self.dialogue_manager = AgentDialogueManager(
             self.db_path, self.llm_service, self.embedding_service,

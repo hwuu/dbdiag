@@ -4,7 +4,7 @@
 """
 import re
 import time
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 import openai
 from openai import APITimeoutError, APIConnectionError, RateLimitError
 from dbdiag.utils.config import Config
@@ -12,6 +12,9 @@ from dbdiag.utils.config import Config
 
 # 匹配 <think>...</think> 标签（支持多行）
 THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+# 进度回调类型
+ProgressCallback = Callable[[str], None]
 
 
 class LLMService:
@@ -22,14 +25,20 @@ class LLMService:
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_RETRY_DELAY = 1  # 秒，重试间隔
 
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        progress_callback: Optional[ProgressCallback] = None,
+    ):
         """
         初始化 LLM 服务
 
         Args:
             config: 全局配置对象
+            progress_callback: 进度回调函数（用于报告重试等状态）
         """
         self.config = config
+        self._progress_callback = progress_callback
         self.client = openai.OpenAI(
             api_key=config.llm.api_key,
             base_url=config.llm.api_base,
@@ -43,6 +52,11 @@ class LLMService:
         self.timeout = getattr(config.llm, 'timeout', self.DEFAULT_TIMEOUT)
         self.max_retries = getattr(config.llm, 'max_retries', self.DEFAULT_MAX_RETRIES)
         self.retry_delay = getattr(config.llm, 'retry_delay', self.DEFAULT_RETRY_DELAY)
+
+    def _report_progress(self, message: str):
+        """报告进度"""
+        if self._progress_callback:
+            self._progress_callback(message)
 
     def generate(
         self,
@@ -92,11 +106,19 @@ class LLMService:
 
             except (APITimeoutError, APIConnectionError, RateLimitError) as e:
                 last_error = e
+                error_type = type(e).__name__
                 if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (attempt + 1)
+                    self._report_progress(
+                        f"LLM 调用失败 ({error_type})，{wait_time}s 后重试 ({attempt + 1}/{self.max_retries})..."
+                    )
                     # 等待后重试
-                    time.sleep(self.retry_delay * (attempt + 1))  # 指数退避
+                    time.sleep(wait_time)  # 指数退避
                     continue
                 else:
+                    self._report_progress(
+                        f"LLM 调用失败 ({error_type})，重试次数已用尽"
+                    )
                     raise
 
             except Exception as e:
