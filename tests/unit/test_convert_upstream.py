@@ -110,7 +110,7 @@ class TestUpstreamConverter:
         """测试: 直接映射字段应正确转换"""
         mock_llm = Mock()
         # Mock LLM 返回空 anomalies 和默认 metadata
-        mock_llm.generate_simple.side_effect = [
+        mock_llm.generate.side_effect = [
             '[]',  # anomalies
             '{"db_type": "PostgreSQL", "version": "", "module": "unknown", "severity": "medium"}',  # metadata
         ]
@@ -136,7 +136,7 @@ class TestUpstreamConverter:
     def test_extract_anomalies_success(self):
         """测试: 成功从分析过程提取 anomalies"""
         mock_llm = Mock()
-        mock_llm.generate_simple.return_value = '''[
+        mock_llm.generate.return_value = '''[
             {
                 "description": "wait_io 占比 65%",
                 "observation_method": "SELECT wait_event FROM pg_stat_activity",
@@ -156,7 +156,7 @@ class TestUpstreamConverter:
     def test_extract_anomalies_with_markdown_code_block(self):
         """测试: 处理 LLM 返回的 markdown 代码块"""
         mock_llm = Mock()
-        mock_llm.generate_simple.return_value = '''```json
+        mock_llm.generate.return_value = '''```json
 [
     {
         "description": "索引膨胀",
@@ -181,12 +181,12 @@ class TestUpstreamConverter:
         result = asyncio.run(converter._extract_anomalies(""))
 
         assert result == []
-        mock_llm.generate_simple.assert_not_called()
+        mock_llm.generate.assert_not_called()
 
     def test_infer_metadata_success(self):
         """测试: 成功推断 metadata"""
         mock_llm = Mock()
-        mock_llm.generate_simple.return_value = '''{
+        mock_llm.generate.return_value = '''{
             "db_type": "PostgreSQL",
             "version": "14.5",
             "module": "query_optimizer",
@@ -209,7 +209,7 @@ class TestUpstreamConverter:
     def test_infer_metadata_default_on_error(self):
         """测试: LLM 错误时返回默认 metadata"""
         mock_llm = Mock()
-        mock_llm.generate_simple.side_effect = Exception("LLM error")
+        mock_llm.generate.side_effect = Exception("LLM error")
 
         converter = UpstreamConverter(mock_llm, concurrency=1)
 
@@ -276,7 +276,7 @@ class TestConvertUpstreamData:
             # Mock LLM
             with patch('dbdiag.scripts.convert_upstream.LLMService') as MockLLM:
                 mock_llm = Mock()
-                mock_llm.generate_simple.side_effect = [
+                mock_llm.generate.side_effect = [
                     '[{"description": "wait_io 高", "observation_method": "", "why_relevant": ""}]',
                     '{"db_type": "PostgreSQL", "version": "", "module": "query_optimizer", "severity": "medium"}',
                 ]

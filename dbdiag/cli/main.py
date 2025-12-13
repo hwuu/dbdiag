@@ -944,6 +944,16 @@ class AgentCLI(CLI):
 
     def _handle_diagnosis(self, user_message: str) -> bool:
         """处理诊断消息，返回 True 表示诊断完成"""
+        import asyncio
+        return asyncio.run(self._handle_diagnosis_stream(user_message))
+
+    async def _handle_diagnosis_stream(self, user_message: str) -> bool:
+        """流式处理诊断消息，返回 True 表示诊断完成"""
+        from dbdiag.core.agent.stream_models import StreamMessageType
+        from rich.live import Live
+        from rich.markdown import Markdown as RichMarkdown
+        from rich.padding import Padding
+
         try:
             self.console.print()
             self.console.print(Text.from_markup(f"[bold]• 第 {self.round_count + 1} 轮[/bold]"))
@@ -953,24 +963,81 @@ class AgentCLI(CLI):
                 self._print_indented(Text("正在分析问题...", style="dim"))
                 self.session_id = self.dialogue_manager.create_session(user_message)
 
-            self._print_indented(Text("正在处理...", style="dim"))
-            response = self.dialogue_manager.process_input(self.session_id, user_message)
+            # 流式处理
+            full_message = ""
+            final_data = None
+            header_printed = False
+            live_context = None
+            chunk_buffer = ""  # 缓冲区，避免每个字符都触发渲染
 
-            self.console.print()
+            def make_padded_markdown(text: str):
+                """创建带缩进的 Markdown"""
+                return Padding(RichMarkdown(text), (0, 0, 0, 2))
 
-            # 更新统计并显示状态
-            self._update_stats_from_session()
-            self._print_indented(self._render_footer())
-            self.console.print()  # footer 和响应之间空一行
+            async for msg in self.dialogue_manager.process_stream(self.session_id, user_message):
+                if msg.type == StreamMessageType.PROGRESS:
+                    # 进度消息
+                    self._print_indented(Text(f"→ {msg.content}", style="dim"))
+                elif msg.type == StreamMessageType.CHUNK:
+                    # 文本增量
+                    chunk_buffer += msg.content
 
-            # 渲染响应
-            self._render_response(response)
+                    # 打印头部信息（只打印一次）
+                    if not header_printed:
+                        self.console.print()
+                        self._update_stats_from_session()
+                        self._print_indented(self._render_footer())
+                        self.console.print()
+                        header_printed = True
+                        # 创建 Live 上下文用于流式 Markdown 渲染
+                        live_context = Live(
+                            make_padded_markdown(chunk_buffer),
+                            console=self.console,
+                            refresh_per_second=10,
+                        )
+                        live_context.start()
 
-            # 输出末尾空行（与下一轮输入分隔）
+                    full_message += msg.content
+
+                    # 每累积一定字符或遇到换行时更新显示（减少渲染频率）
+                    if len(chunk_buffer) >= 10 or '\n' in msg.content:
+                        if live_context:
+                            live_context.update(make_padded_markdown(full_message))
+                        chunk_buffer = ""
+
+                elif msg.type == StreamMessageType.FINAL:
+                    # 最终消息
+                    final_data = msg.data
+
+                    # 停止 Live 并显示最终 Markdown
+                    if live_context:
+                        live_context.update(make_padded_markdown(full_message))
+                        live_context.stop()
+                        live_context = None
+                    elif msg.content:
+                        # 如果没有收到 CHUNK，直接显示 FINAL 内容
+                        if not header_printed:
+                            self.console.print()
+                            self._update_stats_from_session()
+                            self._print_indented(self._render_footer())
+                            self.console.print()
+                        self._print_indented(RichMarkdown(msg.content))
+
+                elif msg.type == StreamMessageType.ERROR:
+                    if live_context:
+                        live_context.stop()
+                        live_context = None
+                    self._print_indented(Text(f"错误: {msg.content}", style="red"))
+
+            # 确保 Live 上下文已关闭
+            if live_context:
+                live_context.stop()
+
+            # 输出末尾空行
             self.console.print()
 
             # 检查是否完成诊断
-            if response.details and response.details.diagnosis:
+            if final_data and final_data.get("diagnosis"):
                 return True
 
             return False

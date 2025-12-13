@@ -101,7 +101,7 @@ class IntentClassifier:
         )
 
         try:
-            response = self.llm_service.generate_simple(
+            response = self.llm_service.generate(
                 user_prompt,
                 system_prompt=self.SYSTEM_PROMPT,
             )

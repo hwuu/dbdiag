@@ -65,7 +65,7 @@ class TestIntentClassifier:
     def _create_classifier(self, llm_response: str) -> IntentClassifier:
         """创建 mock 分类器"""
         mock_llm = Mock()
-        mock_llm.generate_simple.return_value = llm_response
+        mock_llm.generate.return_value = llm_response
         return IntentClassifier(mock_llm)
 
     # ==================== I-101 Feedback 测试 ====================
@@ -279,7 +279,7 @@ class TestIntentClassifier:
     def test_llm_failure_fallback(self):
         """LLM 失败兜底测试"""
         mock_llm = Mock()
-        mock_llm.generate_simple.side_effect = Exception("LLM Error")
+        mock_llm.generate.side_effect = Exception("LLM Error")
         classifier = IntentClassifier(mock_llm)
 
         intent = classifier.classify(

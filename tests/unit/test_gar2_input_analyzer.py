@@ -123,7 +123,7 @@ class TestInputAnalyzer:
 
     def test_natural_language_with_llm(self):
         mock_llm = MagicMock()
-        mock_llm.generate_simple.return_value = '''
+        mock_llm.generate.return_value = '''
         {
             "feedback": {
                 "P-001": "denied",
@@ -147,7 +147,7 @@ class TestInputAnalyzer:
 
     def test_llm_returns_markdown_json(self):
         mock_llm = MagicMock()
-        mock_llm.generate_simple.return_value = '''```json
+        mock_llm.generate.return_value = '''```json
         {
             "feedback": {"P-001": "confirmed"},
             "new_observations": []
@@ -160,7 +160,7 @@ class TestInputAnalyzer:
 
     def test_llm_failure_fallback(self):
         mock_llm = MagicMock()
-        mock_llm.generate_simple.side_effect = Exception("API error")
+        mock_llm.generate.side_effect = Exception("API error")
         analyzer = InputAnalyzer(llm_service=mock_llm)
 
         delta = analyzer.analyze("IO 正常", self.recommended_ids)

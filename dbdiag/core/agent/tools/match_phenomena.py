@@ -284,7 +284,7 @@ class MatchPhenomenaTool(BaseTool[MatchPhenomenaInput, MatchPhenomenaOutput]):
         )
 
         # 调用 LLM
-        response = self._llm_service.generate_simple(
+        response = self._llm_service.generate(
             user_prompt,
             system_prompt=MATCH_PHENOMENA_SYSTEM_PROMPT,
         )

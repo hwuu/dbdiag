@@ -17,6 +17,7 @@
 - [十、与现有系统集成](#十与现有系统集成)
 - [十一、测试策略](#十一测试策略)
 - [十二、实施计划](#十二实施计划)
+- [十三、流式输出](#十三流式输出)
 - [附录](#附录)
 
 ---
@@ -1360,10 +1361,11 @@ class CallError(BaseModel):
 ## 要求
 
 1. 用口语化的方式描述诊断进展和建议
-2. 如果有推荐现象，必须包含完整信息：
-   - 现象描述
-   - 如何观察（observation_method）
-   - 为什么推荐这个现象
+2. **重要：推荐现象必须严格使用"推荐确认的现象"章节中提供的内容**：
+   - **禁止自己编造推荐现象**
+   - 必须使用提供的现象描述、观察方法、推荐原因
+   - 可以适当润色语言，但内容必须与提供的信息一致
+   - 如果没有提供推荐现象，则不要编造
 3. 如果有工具调用失败，必须说明：
    - 什么操作执行不成功
    - 失败原因
@@ -2063,6 +2065,112 @@ def test_planner_diagnose_intent():
 2. Web API 复用 `/chat` 端点，通过配置切换
 3. 端到端测试（正常流程、澄清流程、错误处理）
 4. 文档更新
+
+---
+
+## 十三、流式输出
+
+### 13.1 概述
+
+为 Agent 模块添加流式输出功能，使用统一的 `AsyncGenerator` 模式，实现响应的实时推送。
+
+**范围**：仅 Agent 模块（AgentDialogueManager、Responder、WebSocket）
+**消息格式**：纯文本增量
+**消息类型**：简化版（progress, chunk, final, error）
+
+### 13.2 消息模型
+
+**文件**：`dbdiag/core/agent/stream_models.py`
+
+```python
+class StreamMessageType(str, Enum):
+    PROGRESS = "progress"   # Progress info
+    CHUNK = "chunk"         # Text increment
+    FINAL = "final"         # Final message with data
+    ERROR = "error"         # Error
+
+class StreamMessage(BaseModel):
+    type: StreamMessageType
+    content: Optional[str] = None   # Text content
+    data: Optional[dict] = None     # Structured data (for FINAL)
+```
+
+### 13.3 LLMService 改造
+
+**文件**：`dbdiag/services/llm_service.py`
+
+新增 `ThinkTagFilter` 类：状态机实时过滤 `<think>...</think>` 标签
+
+新增 `AsyncOpenAI` 客户端（延迟初始化）：
+```python
+@property
+def async_client(self) -> AsyncOpenAI:
+    if self._async_client is None:
+        self._async_client = AsyncOpenAI(...)
+    return self._async_client
+```
+
+新增 `generate_stream()` 方法：
+```python
+async def generate_stream(
+    self, prompt: str, system_prompt: str = None
+) -> AsyncGenerator[str, None]:
+    """Streaming generation with retry and <think> filtering"""
+```
+
+### 13.4 Responder 改造
+
+**文件**：`dbdiag/core/agent/responder.py`
+
+新增流式方法：
+- `generate_stream()` - 对应 `generate()`
+- `generate_for_diagnose_stream()` - 对应 `generate_for_diagnose()`
+- `generate_for_clarification_stream()` - 澄清不需要 LLM，直接返回结构化数据
+
+### 13.5 DialogueManager 改造
+
+**文件**：`dbdiag/core/agent/dialogue_manager.py`
+
+新增流式方法：
+- `process_stream()` - 对应 `process_input()`
+- `_run_agent_loop_stream()` - 对应 `_run_agent_loop()`
+
+Progress 消息通过 `yield` 发出（替代 callback），Planner 调用保持同步。
+
+### 13.6 WebSocket 端点
+
+**文件**：`dbdiag/api/agent_chat.py`
+
+新增端点：`/agent/ws/chat`
+
+协议：
+```
+Client -> Server:
+  {"type": "start", "user_problem": "问题描述"}
+  {"type": "continue", "user_message": "用户输入"}
+  {"type": "close"}
+
+Server -> Client:
+  {"type": "progress", "content": "进度信息..."}
+  {"type": "chunk", "content": "文本增量"}
+  {"type": "final", "content": "完整响应", "data": {...}, "session_id": "xxx"}
+  {"type": "error", "content": "错误信息"}
+```
+
+### 13.7 文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `dbdiag/core/agent/stream_models.py` | 新增 | StreamMessage 等模型 |
+| `dbdiag/services/llm_service.py` | 修改 | AsyncOpenAI + generate_stream + ThinkTagFilter |
+| `dbdiag/core/agent/responder.py` | 修改 | generate_stream 等方法 |
+| `dbdiag/core/agent/dialogue_manager.py` | 修改 | process_stream + _run_agent_loop_stream |
+| `dbdiag/api/agent_chat.py` | 修改 | WebSocket 端点 |
+| `pytest.ini` | 新增 | pytest-asyncio 配置 |
+| `tests/unit/test_stream_models.py` | 新增 | StreamMessage + ThinkTagFilter 测试 |
+| `tests/unit/test_llm_service_stream.py` | 新增 | LLMService 流式测试 |
+| `tests/unit/test_responder_stream.py` | 新增 | Responder 流式测试 |
+| `tests/unit/test_dialogue_manager_stream.py` | 新增 | DialogueManager 流式测试 |
 
 ---
 

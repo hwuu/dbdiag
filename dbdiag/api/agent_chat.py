@@ -3,10 +3,11 @@
 支持 Agent Loop 诊断模式。
 """
 from typing import Dict, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from dbdiag.core.agent import AgentDialogueManager, AgentResponse
+from dbdiag.core.agent.stream_models import StreamMessageType
 from dbdiag.services.llm_service import LLMService
 from dbdiag.services.embedding_service import EmbeddingService
 from dbdiag.utils.config import load_config
@@ -245,3 +246,118 @@ async def end_agent_chat(session_id: str):
         return {"message": "会话已结束", "session_id": session_id}
     else:
         raise HTTPException(status_code=404, detail="会话不存在")
+
+
+# ============================================================
+# WebSocket 流式端点
+# ============================================================
+
+
+@router.websocket("/agent/ws/chat")
+async def agent_websocket_chat(websocket: WebSocket):
+    """Agent 流式 WebSocket 聊天端点
+
+    协议：
+    1. 客户端发送消息:
+       {"type": "start", "user_problem": "问题描述"}   -- 开始新会话
+       {"type": "continue", "user_message": "用户输入"} -- 继续对话
+
+    2. 服务端发送消息:
+       {"type": "progress", "content": "进度信息..."}   -- 进度更新
+       {"type": "chunk", "content": "文本增量"}         -- 响应文本增量
+       {"type": "final", "content": "完整响应", "data": {...}, "session_id": "xxx"}  -- 最终消息
+       {"type": "error", "content": "错误信息"}         -- 错误
+    """
+    await websocket.accept()
+
+    dialogue_manager: Optional[AgentDialogueManager] = None
+    session_id: Optional[str] = None
+
+    try:
+        while True:
+            # 接收消息
+            msg = await websocket.receive_json()
+            msg_type = msg.get("type", "")
+
+            if msg_type == "start":
+                # 开始新会话
+                user_problem = msg.get("user_problem", "").strip()
+                if not user_problem:
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": "问题描述不能为空",
+                    })
+                    continue
+
+                # 创建对话管理器和会话
+                dialogue_manager = _create_agent_dialogue_manager()
+                session_id = dialogue_manager.create_session(user_problem)
+                _agent_session_managers[session_id] = dialogue_manager
+
+                # 流式处理
+                try:
+                    async for stream_msg in dialogue_manager.process_stream(
+                        session_id, user_problem
+                    ):
+                        await websocket.send_json({
+                            "type": stream_msg.type.value,
+                            "content": stream_msg.content,
+                            "data": stream_msg.data if stream_msg.type == StreamMessageType.FINAL else None,
+                            "session_id": session_id if stream_msg.type == StreamMessageType.FINAL else None,
+                        })
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": f"处理失败: {str(e)}",
+                    })
+
+            elif msg_type == "continue":
+                # 继续对话
+                user_message = msg.get("user_message", "").strip()
+                if not user_message:
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": "消息内容不能为空",
+                    })
+                    continue
+
+                if not dialogue_manager or not session_id:
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": "请先开始会话",
+                    })
+                    continue
+
+                # 流式处理
+                try:
+                    async for stream_msg in dialogue_manager.process_stream(
+                        session_id, user_message
+                    ):
+                        await websocket.send_json({
+                            "type": stream_msg.type.value,
+                            "content": stream_msg.content,
+                            "data": stream_msg.data if stream_msg.type == StreamMessageType.FINAL else None,
+                            "session_id": session_id if stream_msg.type == StreamMessageType.FINAL else None,
+                        })
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": f"处理失败: {str(e)}",
+                    })
+
+            elif msg_type == "close":
+                # 关闭会话
+                break
+
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": f"未知消息类型: {msg_type}",
+                })
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        # 清理会话
+        if session_id and session_id in _agent_session_managers:
+            del _agent_session_managers[session_id]

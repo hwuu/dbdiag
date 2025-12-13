@@ -266,7 +266,7 @@ class TestGAR2DialogueManager:
         manager._ticket_dao = MagicMock()
         manager._ticket_dao.get_by_root_cause_id.return_value = []
         manager.llm_service = MagicMock()
-        manager.llm_service.generate_simple.return_value = "推导过程"
+        manager.llm_service.generate.return_value = "推导过程"
         manager.db_path = ":memory:"
 
         manager.session = SessionStateV2(

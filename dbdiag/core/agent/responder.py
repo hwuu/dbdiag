@@ -3,9 +3,10 @@
 将 Agent Loop 的最终结果转换为自然语言响应。
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator
 
 from dbdiag.services.llm_service import LLMService
+from dbdiag.core.agent.stream_models import StreamMessage, StreamMessageType
 from dbdiag.core.agent.models import (
     SessionState,
     AgentResponse,
@@ -26,10 +27,11 @@ RESPONDER_SYSTEM_PROMPT = """你是一个数据库诊断助手。根据诊断结
 ## 要求
 
 1. 用口语化的方式描述诊断进展和建议
-2. 如果有推荐现象，必须包含完整信息：
-   - 现象描述
-   - 如何观察（observation_method）
-   - 为什么推荐这个现象
+2. **重要：推荐现象必须严格使用"推荐确认的现象"章节中提供的内容**：
+   - **禁止自己编造推荐现象**
+   - 必须使用提供的现象描述、观察方法、推荐原因
+   - 可以适当润色语言，但内容必须与提供的信息一致
+   - 如果没有提供推荐现象，则不要编造
 3. 如果有工具调用失败，必须说明：
    - 什么操作执行不成功
    - 失败原因
@@ -95,7 +97,7 @@ class Responder:
         )
 
         # 调用 LLM 生成响应
-        message = self._llm_service.generate_simple(
+        message = self._llm_service.generate(
             user_prompt,
             system_prompt=RESPONDER_SYSTEM_PROMPT,
         )
@@ -106,6 +108,57 @@ class Responder:
         return AgentResponse(
             message=message,
             details=details,
+        )
+
+    async def generate_stream(
+        self,
+        session: SessionState,
+        response_context: Dict[str, Any],
+        call_results: List[CallResult],
+        call_errors: List[CallError],
+    ) -> AsyncGenerator[StreamMessage, None]:
+        """流式生成响应
+
+        Args:
+            session: 当前会话状态
+            response_context: 响应上下文（来自 Planner 的 response_context）
+            call_results: 工具调用结果列表
+            call_errors: 工具调用错误列表
+
+        Yields:
+            StreamMessage: 流式消息（PROGRESS, CHUNK, FINAL）
+        """
+        # 发送进度消息
+        yield StreamMessage(type=StreamMessageType.PROGRESS, content="生成响应中...")
+
+        # 构建 prompt
+        user_prompt = self._build_prompt(
+            session, response_context, call_results, call_errors
+        )
+
+        # Debug: 打印发送给 LLM 的 prompt（调试时取消注释）
+        # yield StreamMessage(
+        #     type=StreamMessageType.PROGRESS,
+        #     content=f"[DEBUG] Responder prompt:\n{user_prompt[:2000]}..."  # 截取前 2000 字符
+        # )
+
+        # 流式调用 LLM，收集完整响应
+        full_message = ""
+        async for chunk in self._llm_service.generate_stream(
+            user_prompt,
+            system_prompt=RESPONDER_SYSTEM_PROMPT,
+        ):
+            full_message += chunk
+            yield StreamMessage(type=StreamMessageType.CHUNK, content=chunk)
+
+        # 构建结构化详情
+        details = self._build_details(session, call_results, call_errors)
+
+        # 发送最终消息
+        yield StreamMessage(
+            type=StreamMessageType.FINAL,
+            content=full_message,
+            data=details.model_dump(),
         )
 
     def generate_simple(
@@ -368,3 +421,103 @@ class Responder:
         ]
 
         return self.generate(session, response_context, call_results, [])
+
+    async def generate_for_diagnose_stream(
+        self,
+        session: SessionState,
+        diagnose_output: DiagnoseOutput,
+    ) -> AsyncGenerator[StreamMessage, None]:
+        """流式生成诊断结果响应
+
+        Args:
+            session: 会话状态
+            diagnose_output: 诊断输出
+
+        Yields:
+            StreamMessage: 流式消息
+        """
+        response_context = {
+            "type": "diagnosis_result",
+            "data": {
+                "diagnosis_complete": diagnose_output.diagnosis_complete,
+                "hypotheses": [
+                    {
+                        "root_cause_id": h.root_cause_id,
+                        "root_cause_description": h.root_cause_description,
+                        "confidence": h.confidence,
+                    }
+                    for h in diagnose_output.hypotheses
+                ],
+            },
+        }
+
+        if diagnose_output.diagnosis:
+            response_context["data"]["diagnosis"] = {
+                "root_cause_description": diagnose_output.diagnosis.root_cause_description,
+                "confidence": diagnose_output.diagnosis.confidence,
+                "solution": diagnose_output.diagnosis.solution,
+            }
+
+        call_results = [
+            CallResult(
+                tool="diagnose",
+                success=True,
+                summary=f"诊断{'完成' if diagnose_output.diagnosis_complete else '进行中'}, "
+                        f"假设数: {len(diagnose_output.hypotheses)}",
+            )
+        ]
+
+        async for msg in self.generate_stream(session, response_context, call_results, []):
+            yield msg
+
+    async def generate_for_clarification_stream(
+        self,
+        session: SessionState,
+        match_output: MatchPhenomenaOutput,
+    ) -> AsyncGenerator[StreamMessage, None]:
+        """流式生成澄清响应
+
+        澄清场景不需要 LLM 调用，直接返回结构化数据。
+
+        Args:
+            session: 会话状态
+            match_output: 现象匹配输出
+
+        Yields:
+            StreamMessage: 流式消息（直接 FINAL）
+        """
+        # 找出需要澄清的项
+        clarifications = [
+            interp for interp in match_output.interpreted
+            if interp.needs_clarification
+        ]
+
+        if not clarifications:
+            # 无需澄清，直接返回成功消息
+            yield StreamMessage(
+                type=StreamMessageType.FINAL,
+                content="匹配成功。",
+                data=ResponseDetails(
+                    status="exploring" if not session.hypotheses else "narrowing",
+                    top_hypothesis=session.top_hypothesis.root_cause_description if session.top_hypothesis else None,
+                    top_confidence=session.top_hypothesis.confidence if session.top_hypothesis else 0.0,
+                    call_results=[],
+                ).model_dump(),
+            )
+            return
+
+        # 需要澄清，返回结构化数据
+        message = "请根据以下选项进行澄清："
+        details = ResponseDetails(
+            status="exploring",
+            top_hypothesis=session.top_hypothesis.root_cause_description if session.top_hypothesis else None,
+            top_confidence=session.top_hypothesis.confidence if session.top_hypothesis else 0.0,
+            call_results=[],
+            clarifications=clarifications,
+        )
+
+        yield StreamMessage(
+            type=StreamMessageType.FINAL,
+            content=message,
+            data=details.model_dump(),
+        )

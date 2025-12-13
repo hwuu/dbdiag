@@ -138,7 +138,7 @@ class RARDialogueManager:
         prompt = self._build_prompt(user_message, tickets)
 
         # 4. 调用 LLM
-        llm_response = self.llm_service.generate_simple(prompt, system_prompt=SYSTEM_PROMPT)
+        llm_response = self.llm_service.generate(prompt, system_prompt=SYSTEM_PROMPT)
 
         # 5. 解析响应
         try:

@@ -91,7 +91,7 @@ class TestRARDialogueManager:
         mock_llm, mock_embedding = mock_services
 
         # Mock LLM 返回推荐模式
-        mock_llm.generate_simple.return_value = json.dumps({
+        mock_llm.generate.return_value = json.dumps({
             "action": "recommend",
             "confidence": 0.45,
             "reasoning": "需要更多信息",
@@ -121,7 +121,7 @@ class TestRARDialogueManager:
         mock_llm, mock_embedding = mock_services
 
         # Mock LLM 返回诊断模式
-        mock_llm.generate_simple.return_value = json.dumps({
+        mock_llm.generate.return_value = json.dumps({
             "action": "diagnose",
             "confidence": 0.85,
             "root_cause": "索引膨胀",
@@ -145,7 +145,7 @@ class TestRARDialogueManager:
         from dbdiag.core.rar.dialogue_manager import RARDialogueManager
 
         mock_llm, mock_embedding = mock_services
-        mock_llm.generate_simple.return_value = json.dumps({
+        mock_llm.generate.return_value = json.dumps({
             "action": "recommend",
             "confidence": 0.3,
             "reasoning": "需要信息",
@@ -194,7 +194,7 @@ class TestRARDialogueManager:
         mock_llm, mock_embedding = mock_services
 
         # LLM 总是返回推荐
-        mock_llm.generate_simple.return_value = json.dumps({
+        mock_llm.generate.return_value = json.dumps({
             "action": "recommend",
             "confidence": 0.3,
             "reasoning": "需要信息",

@@ -361,7 +361,7 @@ def _generate_phenomenon(
 
         try:
             start_time = time.time()
-            standard_description = llm_service.generate_simple(prompt)
+            standard_description = llm_service.generate(prompt)
             elapsed = time.time() - start_time
             if llm_call_times is not None:
                 llm_call_times.append(elapsed)
@@ -482,7 +482,7 @@ def _generate_root_cause(
 
         try:
             start_time = time.time()
-            standard_description = llm_service.generate_simple(desc_prompt)
+            standard_description = llm_service.generate(desc_prompt)
             standard_description = standard_description.strip()
 
             # LLM 合并解决方案
@@ -496,7 +496,7 @@ def _generate_root_cause(
 
 只输出合并后的解决方案，不要其他内容。"""
 
-            standard_solution = llm_service.generate_simple(solution_prompt)
+            standard_solution = llm_service.generate(solution_prompt)
             standard_solution = standard_solution.strip()
 
             elapsed = time.time() - start_time

@@ -321,7 +321,7 @@ class UpstreamConverter:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                self.llm_service.generate_simple,
+                self.llm_service.generate,
                 prompt,
             )
 
@@ -392,7 +392,7 @@ class UpstreamConverter:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                self.llm_service.generate_simple,
+                self.llm_service.generate,
                 prompt,
             )
 

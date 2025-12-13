@@ -111,7 +111,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index
@@ -149,7 +149,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index
@@ -188,7 +188,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index
@@ -226,7 +226,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index
@@ -262,7 +262,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index
@@ -319,7 +319,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index
@@ -377,7 +377,7 @@ class TestRebuildIndex:
 
                     with patch('dbdiag.scripts.rebuild_index.LLMService') as MockLLM:
                         mock_llm_instance = Mock()
-                        mock_llm_instance.generate_simple.return_value = "标准化描述"
+                        mock_llm_instance.generate.return_value = "标准化描述"
                         MockLLM.return_value = mock_llm_instance
 
                         from dbdiag.scripts.rebuild_index import rebuild_index

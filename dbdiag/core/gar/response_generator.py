@@ -191,7 +191,7 @@ class ResponseGenerator:
 - 不要重复"根因已定位"这样的开头"""
 
         try:
-            summary = self.llm_service.generate_simple(prompt)
+            summary = self.llm_service.generate(prompt)
             # 清理 LLM 可能返回的 markdown 代码块标记
             summary = summary.strip()
             if summary.startswith("```markdown"):

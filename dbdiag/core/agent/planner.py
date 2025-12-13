@@ -32,10 +32,15 @@ PLANNER_SYSTEM_PROMPT = """你是一个数据库诊断助手的决策模块，�
 
 输入参数：
 - raw_observations: 原始观察描述列表，每项包含 description 和可选的 context
-- confirmations: 直接确认的现象 ID 列表（如用户说"1确认"）
-- denials: 否认的现象 ID 列表
+- confirmations: 直接确认的现象序号或 ID 列表（如用户说"1确认"则传 ["1"]）
+- denials: 否认的现象序号或 ID 列表
 - dialogue_history: 最近对话历史（用于指代消解）
 - pending_recommendations: 当前待确认的现象列表
+
+**重要**：
+- 如果用户输入包含多个观察（用"并且"、"而且"、"同时"、"，"等连接），必须拆分成多个 raw_observations
+- 例如：用户说"xxx，并且 yyy"，应拆分为两个 raw_observations：[{description: "xxx"}, {description: "yyy"}]
+- 如果用户描述明显对应待确认现象列表中的某项，应放入 confirmations（使用序号如 "1", "2"）
 
 输出：
 - 匹配成功：返回 matched phenomena 列表（含匹配度）
@@ -82,15 +87,17 @@ PLANNER_SYSTEM_PROMPT = """你是一个数据库诊断助手的决策模块，�
 ## 决策规则
 
 1. **用户有新观察描述** → 先调 match_phenomena
-2. **match_phenomena 返回 all_matched: true** → 调 diagnose
+2. **match_phenomena 返回 all_matched: true** → **必须调 diagnose**（不能直接 respond）
 3. **match_phenomena 返回 needs_clarification** → 直接回复（请求澄清）
 4. **diagnose 返回结果** → **必须直接回复**（展示诊断结果和推荐现象，让用户确认）
 5. **用户纯查询（无新观察）** → 调对应查询工具
 
 **重要**：
+- **match_phenomena 执行成功（all_matched: true）后，必须调 diagnose，禁止直接 respond**
 - diagnose 执行后，必须选择 respond，向用户展示结果并等待反馈
 - 同一轮循环中不要重复调用同一工具
 - 如果 loop_context 包含 "工具 diagnose 执行结果"，必须选择 respond
+- 如果 loop_context 包含 "工具 match_phenomena 执行结果" 且 all_matched 为 true，必须选择 call diagnose
 
 ## 输出格式
 
@@ -115,6 +122,76 @@ PLANNER_SYSTEM_PROMPT = """你是一个数据库诊断助手的决策模块，�
     "data": { ... }
   },
   "reasoning": "决策理由"
+}
+```
+
+## 示例
+
+### 示例 1：用户确认多个现象
+待确认现象：
+[1] P-0001: EXPLAIN 显示 Nested Loop 导致笛卡尔积
+[2] P-0002: 在 Join 列上创建索引后查询时间降低
+
+用户输入："EXPLAIN 显示 Nested Loop，并且创建索引后速度提升了"
+
+应输出：
+```json
+{
+  "decision": "call",
+  "tool": "match_phenomena",
+  "tool_input": {
+    "raw_observations": [
+      {"description": "EXPLAIN 显示 Nested Loop"},
+      {"description": "创建索引后速度提升了"}
+    ],
+    "confirmations": [],
+    "denials": []
+  },
+  "reasoning": "用户描述了两个观察，需要拆分后匹配"
+}
+```
+
+### 示例 2：用户用序号确认
+用户输入："1 和 2 都确认"
+
+应输出：
+```json
+{
+  "decision": "call",
+  "tool": "match_phenomena",
+  "tool_input": {
+    "raw_observations": [],
+    "confirmations": ["1", "2"],
+    "denials": []
+  },
+  "reasoning": "用户直接确认了序号 1 和 2"
+}
+```
+
+### 示例 3：match_phenomena 成功后调 diagnose
+当前循环上下文：
+工具 match_phenomena 执行结果:
+```json
+{
+  "all_matched": true,
+  "interpreted": [
+    {"matched_phenomenon": {"phenomenon_id": "P-0012", "match_score": 0.88}}
+  ]
+}
+```
+
+应输出（**必须调 diagnose，禁止 respond**）：
+```json
+{
+  "decision": "call",
+  "tool": "diagnose",
+  "tool_input": {
+    "confirmed_phenomena": [
+      {"phenomenon_id": "P-0012", "match_score": 0.88}
+    ],
+    "denied_phenomena": []
+  },
+  "reasoning": "match_phenomena 返回 all_matched=true，必须调用 diagnose 更新假设"
 }
 ```
 """
@@ -155,7 +232,7 @@ class Planner:
         user_prompt = self._build_prompt(session, loop_context, dialogue_history)
 
         # 调用 LLM
-        response = self._llm_service.generate_simple(
+        response = self._llm_service.generate(
             user_prompt,
             system_prompt=PLANNER_SYSTEM_PROMPT,
         )

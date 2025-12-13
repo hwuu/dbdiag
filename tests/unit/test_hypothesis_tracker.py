@@ -98,7 +98,7 @@ class TestPhenomenonHypothesisTracker:
             mock_embedding.encode.return_value = [0.1, 0.2, 0.3]
 
             mock_llm = Mock()
-            mock_llm.generate_simple.return_value = "0.7"
+            mock_llm.generate.return_value = "0.7"
 
             from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)
@@ -122,7 +122,7 @@ class TestPhenomenonHypothesisTracker:
             mock_embedding.encode.return_value = [0.1, 0.2, 0.3]
 
             mock_llm = Mock()
-            mock_llm.generate_simple.return_value = "0.7"
+            mock_llm.generate.return_value = "0.7"
 
             from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)
@@ -180,7 +180,7 @@ class TestPhenomenonHypothesisTracker:
             mock_embedding.encode.return_value = [0.1, 0.2, 0.3]
 
             mock_llm = Mock()
-            mock_llm.generate_simple.return_value = "0.7"
+            mock_llm.generate.return_value = "0.7"
 
             from dbdiag.core.gar.hypothesis_tracker import PhenomenonHypothesisTracker
             tracker = PhenomenonHypothesisTracker(db_path, mock_llm, mock_embedding)

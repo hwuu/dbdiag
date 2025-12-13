@@ -63,7 +63,7 @@ class TestResponseGenerator:
             db_path = self._setup_test_db(tmpdir)
 
             mock_llm = Mock()
-            mock_llm.generate_simple.return_value = """**观察到的现象：**
+            mock_llm.generate.return_value = """**观察到的现象：**
 用户反馈 wait_io 占比达到 70%，表明存在明显的 IO 等待问题。
 
 **推理链路：**
@@ -95,7 +95,7 @@ class TestResponseGenerator:
             result = generator.generate_response(session, recommendation)
 
             # 验证调用了 LLM
-            assert mock_llm.generate_simple.called
+            assert mock_llm.generate.called
 
             # 验证响应包含诊断总结
             assert "diagnosis_summary" in result
@@ -109,7 +109,7 @@ class TestResponseGenerator:
             db_path = self._setup_test_db(tmpdir)
 
             mock_llm = Mock()
-            mock_llm.generate_simple.side_effect = Exception("LLM 调用失败")
+            mock_llm.generate.side_effect = Exception("LLM 调用失败")
 
             generator = ResponseGenerator(db_path, mock_llm)
 

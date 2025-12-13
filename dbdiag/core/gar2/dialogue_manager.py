@@ -458,7 +458,7 @@ class GAR2DialogueManager:
 直接输出推导过程，不要其他内容。"""
 
         try:
-            return self.llm_service.generate_simple(prompt)
+            return self.llm_service.generate(prompt)
         except Exception:
             # LLM 失败时返回默认推导
             return f"根据观察到的 {len(observed_phenomena)} 个现象，综合判断根因为：{root_cause}"

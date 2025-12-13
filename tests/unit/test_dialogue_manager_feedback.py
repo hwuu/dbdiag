@@ -103,7 +103,7 @@ class TestMarkConfirmedPhenomenaFromFeedback:
     def test_natural_language_llm_extraction(self, mock_dialogue_manager, session_with_recommended):
         """测试自然语言使用 LLM 提取"""
         # Mock LLM 返回
-        mock_dialogue_manager.llm_service.generate_simple.return_value = '''
+        mock_dialogue_manager.llm_service.generate.return_value = '''
 {
   "feedback": {
     "P-0001": "confirmed",
@@ -120,7 +120,7 @@ class TestMarkConfirmedPhenomenaFromFeedback:
         )
 
         # 检查 LLM 被调用
-        assert mock_dialogue_manager.llm_service.generate_simple.called
+        assert mock_dialogue_manager.llm_service.generate.called
 
         # 检查确认/否定结果
         assert len(session_with_recommended.confirmed_phenomena) == 1
@@ -133,7 +133,7 @@ class TestMarkConfirmedPhenomenaFromFeedback:
 
     def test_llm_extraction_with_markdown_codeblock(self, mock_dialogue_manager, session_with_recommended):
         """测试 LLM 返回带 markdown 代码块的 JSON"""
-        mock_dialogue_manager.llm_service.generate_simple.return_value = '''```json
+        mock_dialogue_manager.llm_service.generate.return_value = '''```json
 {
   "feedback": {
     "P-0001": "confirmed"
@@ -152,7 +152,7 @@ class TestMarkConfirmedPhenomenaFromFeedback:
 
     def test_llm_failure_fallback(self, mock_dialogue_manager, session_with_recommended):
         """测试 LLM 失败时回退到关键词匹配"""
-        mock_dialogue_manager.llm_service.generate_simple.side_effect = Exception("LLM error")
+        mock_dialogue_manager.llm_service.generate.side_effect = Exception("LLM error")
 
         new_obs = mock_dialogue_manager._mark_confirmed_phenomena_from_feedback(
             "IO 正常，观察到一些异常",

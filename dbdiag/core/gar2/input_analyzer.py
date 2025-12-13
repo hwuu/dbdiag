@@ -184,7 +184,7 @@ new_observations: 用户描述的、不在待确认列表中的新观察。只�
 用户消息: {user_input}"""
 
         try:
-            response = self.llm_service.generate_simple(
+            response = self.llm_service.generate(
                 user_prompt,
                 system_prompt=system_prompt,
             )
